@@ -463,7 +463,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       'ref': 'Frente a la parada de buses',
       'distance': '4.2 km',
       'offeredPrice': 3.00,
-      'payment': 'Efectivo $',
+      'payment': 'Efectivo \$',
       'type': 'Mototaxi',
     },
     {

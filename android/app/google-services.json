@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "493972626457",
+    "project_id": "carupano-drivers",
+    "storage_bucket": "carupano-drivers.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:493972626457:android:7da2838c51fd7bf0a69e88",
+        "android_client_info": {
+          "package_name": "com.carupanoriders.app.carupano_riders"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDwGh_nBcpBhc5FoDDhGRmvnvqX7XWHY0c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
