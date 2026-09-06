@@ -24,8 +24,22 @@ class CarupanoRidersApp extends StatelessWidget {
   }
 }
 
-class MainMobileFrameScreen extends StatelessWidget {
+class MainMobileFrameScreen extends StatefulWidget {
   const MainMobileFrameScreen({super.key});
+
+  @override
+  State<MainMobileFrameScreen> createState() => _MainMobileFrameScreenState();
+}
+
+class _MainMobileFrameScreenState extends State<MainMobileFrameScreen> {
+  // false = Modo Pasajero, true = Modo Conductor (estilo InDrive)
+  bool isDriverMode = false;
+
+  void _toggleMode() {
+    setState(() {
+      isDriverMode = !isDriverMode;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,7 +65,9 @@ class MainMobileFrameScreen extends StatelessWidget {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(32),
-            child: const RiderHomeScreen(),
+            child: isDriverMode
+                ? DriverHomeScreen(onSwitchToPassenger: _toggleMode)
+                : RiderHomeScreen(onSwitchToDriver: _toggleMode),
           ),
         ),
       ),
@@ -60,7 +76,8 @@ class MainMobileFrameScreen extends StatelessWidget {
 }
 
 class RiderHomeScreen extends StatefulWidget {
-  const RiderHomeScreen({super.key});
+  final VoidCallback onSwitchToDriver;
+  const RiderHomeScreen({super.key, required this.onSwitchToDriver});
 
   @override
   State<RiderHomeScreen> createState() => _RiderHomeScreenState();
@@ -101,18 +118,29 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black),
                 ),
                 Text(
-                  'Sucre, Venezuela 🇻🇪',
-                  style: TextStyle(fontSize: 11, color: Colors.grey),
+                  'Modo Pasajero 🚶‍♂️',
+                  style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w600),
                 ),
               ],
             ),
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_none, color: Colors.black87),
-            onPressed: () {},
+          // Botón InDrive para cambiar a Modo Conductor
+          TextButton.icon(
+            onPressed: widget.onSwitchToDriver,
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFFFFF3CD),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            ),
+            icon: const Icon(Icons.sports_motorsports, color: Color(0xFF856404), size: 18),
+            label: const Text(
+              'Modo Chofer',
+              style: TextStyle(color: Color(0xFF856404), fontSize: 11, fontWeight: FontWeight.bold),
+            ),
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Column(
@@ -392,6 +420,406 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             onPressed: () => Navigator.pop(ctx),
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFFB300), foregroundColor: Colors.black),
             child: const Text('Aceptar'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// PANTALLA MODO CONDUCTOR / MOTOTAXISTA (Estilo InDrive)
+// -------------------------------------------------------------
+class DriverHomeScreen extends StatefulWidget {
+  final VoidCallback onSwitchToPassenger;
+  const DriverHomeScreen({super.key, required this.onSwitchToPassenger});
+
+  @override
+  State<DriverHomeScreen> createState() => _DriverHomeScreenState();
+}
+
+class _DriverHomeScreenState extends State<DriverHomeScreen> {
+  bool isOnline = true;
+  double driverWallet = 4.80; // Saldo de comisiones en dólares
+
+  // Lista simulada de solicitudes abiertas en Carúpano estilo InDrive
+  final List<Map<String, dynamic>> _rideRequests = [
+    {
+      'id': '1',
+      'passenger': 'María González',
+      'pickup': 'Hospital Santos Aníbal Dominicci',
+      'dropoff': 'Plaza Miranda, Centro',
+      'ref': 'Portón de Emergencias, franela azul',
+      'distance': '1.8 km',
+      'offeredPrice': 2.00,
+      'payment': 'Pago Móvil (Banesco)',
+      'type': 'Mototaxi',
+    },
+    {
+      'id': '2',
+      'passenger': 'Carlos Ramírez',
+      'pickup': 'Terminal de Pasajeros de Carúpano',
+      'dropoff': 'Playa Grande (Entrada Caserío)',
+      'ref': 'Frente a la parada de buses',
+      'distance': '4.2 km',
+      'offeredPrice': 3.00,
+      'payment': 'Efectivo $',
+      'type': 'Mototaxi',
+    },
+    {
+      'id': '3',
+      'passenger': 'Elena Salazar',
+      'pickup': 'Av. Perimetral (Frente a Traki)',
+      'dropoff': 'Canchunchú Viejo',
+      'ref': 'Casa rejas negras con mata de mango',
+      'distance': '3.5 km',
+      'offeredPrice': 2.50,
+      'payment': 'Pago Móvil',
+      'type': 'Mototaxi',
+    },
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF181A20),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF262A34),
+        elevation: 0,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Panel del Chofer 🏍️',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: isOnline ? Colors.greenAccent : Colors.grey,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  isOnline ? 'En línea (Carúpano)' : 'Desconectado',
+                  style: const TextStyle(fontSize: 11, color: Colors.white70),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          // Botón para volver a Modo Pasajero
+          TextButton.icon(
+            onPressed: widget.onSwitchToPassenger,
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFF333846),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            ),
+            icon: const Icon(Icons.person, color: Colors.amber, size: 18),
+            label: const Text(
+              'Pasajero',
+              style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Barra de estado de conexión y Billetera de comisiones
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            color: const Color(0xFF262A34),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Saldo de recarga de comisiones
+                Row(
+                  children: [
+                    const Icon(Icons.account_balance_wallet, color: Colors.amber, size: 20),
+                    const SizedBox(width: 8),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Saldo comisión', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                        Text(
+                          '\$${driverWallet.toStringAsFixed(2)} USD',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+
+                // Switch En línea / Desconectado
+                Row(
+                  children: [
+                    Text(
+                      isOnline ? 'CONECTADO' : 'PAUSADO',
+                      style: TextStyle(
+                        color: isOnline ? Colors.greenAccent : Colors.grey,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Switch(
+                      value: isOnline,
+                      activeColor: const Color(0xFFFFB300),
+                      onChanged: (val) {
+                        setState(() {
+                          isOnline = val;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // Título de solicitudes abiertas
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Solicitudes Cercanas (${_rideRequests.length})',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                const Text('Orden: Más recientes', style: TextStyle(color: Colors.white54, fontSize: 11)),
+              ],
+            ),
+          ),
+
+          // Lista de carreras estilo InDrive con botón aceptar / contraofertar
+          Expanded(
+            child: isOnline
+                ? ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    itemCount: _rideRequests.length,
+                    itemBuilder: (context, index) {
+                      final item = _rideRequests[index];
+                      return _buildInDriveRequestCard(item);
+                    },
+                  )
+                : Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        Icon(Icons.power_settings_new, color: Colors.grey, size: 50),
+                        SizedBox(height: 10),
+                        Text(
+                          'Estás desconectado',
+                          style: TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.bold),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Activa el interruptor arriba para recibir carreras.',
+                          style: TextStyle(color: Colors.white38, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInDriveRequestCard(Map<String, dynamic> item) {
+    final double offered = item['offeredPrice'];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF262A34),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF383D4D)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Cabecera: Pasajero, distancia y precio ofrecido
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 16,
+                    backgroundColor: Colors.amber,
+                    child: Text(
+                      item['passenger'][0],
+                      style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item['passenger'],
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      Text(
+                        'A ${item['distance']} • ${item['payment']}',
+                        style: const TextStyle(color: Colors.white54, fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1B382A),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '\$${offered.toStringAsFixed(2)}',
+                  style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ),
+            ],
+          ),
+          const Divider(color: Color(0xFF383D4D), height: 18),
+
+          // Ruta y Referencia
+          Row(
+            children: [
+              const Icon(Icons.trip_origin, color: Colors.greenAccent, size: 14),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  item['pickup'],
+                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(Icons.location_on, color: Colors.redAccent, size: 14),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  item['dropoff'],
+                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(Icons.info_outline, color: Colors.amber, size: 14),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Ref: ${item['ref']}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 11, fontStyle: FontStyle.italic),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // Botones de acción estilo InDrive: Aceptar o Contraofertar
+          Row(
+            children: [
+              // Botón Aceptar la tarifa del pasajero
+              Expanded(
+                flex: 3,
+                child: ElevatedButton(
+                  onPressed: () {
+                    _acceptRide(item, offered);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFB300),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: Text(
+                    'ACEPTAR \$${offered.toStringAsFixed(2)}',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+
+              // Botón Contraofertar +$0.50
+              Expanded(
+                flex: 2,
+                child: OutlinedButton(
+                  onPressed: () {
+                    _acceptRide(item, offered + 0.50);
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Color(0xFF555D75)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: Text(
+                    '+\$0.50 (\$${(offered + 0.5).toStringAsFixed(2)})',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _acceptRide(Map<String, dynamic> item, double agreedPrice) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF262A34),
+        title: const Text('¡Carrera Asignada! 🎉', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Vas a buscar a ${item['passenger']}.\n\n'
+          '📍 Origen: ${item['pickup']}\n'
+          '📌 Ref: ${item['ref']}\n'
+          '🏁 Destino: ${item['dropoff']}\n'
+          '💰 Precio acordado: \$${agreedPrice.toStringAsFixed(2)}\n'
+          '💳 Método: ${item['payment']}\n'
+          '📉 Comisión app (10%): -\$${(agreedPrice * 0.10).toStringAsFixed(2)}',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cerrar', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() {
+                _rideRequests.removeWhere((r) => r['id'] == item['id']);
+                driverWallet -= (agreedPrice * 0.10);
+              });
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Navegación hacia el pasajero iniciada'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFFB300), foregroundColor: Colors.black),
+            child: const Text('Iniciar Ruta'),
           ),
         ],
       ),
