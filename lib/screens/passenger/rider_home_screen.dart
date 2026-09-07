@@ -261,39 +261,50 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           ),
         ],
       ),
-      body: Stack(
-        children: [
-          // 1. MAPA REAL DE CARÚPANO (OpenStreetMap interactivo con zoom y arrastre)
-          Positioned.fill(
-            bottom: rideState == 'idle' ? 335 : null,
-            child: _buildRealCarupanoMap(),
-          ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // El mapa abarca exactamente el 40% de la altura de la pantalla
+          final double mapHeight = constraints.maxHeight * 0.40;
 
-          // 2. PANEL SEGÚN EL ESTADO
-          if (rideState == 'idle')
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: _buildPassengerForm(),
-            ),
+          return Stack(
+            children: [
+              // 1. MAPA REAL DE CARÚPANO (40% de la pantalla)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: rideState == 'idle' ? mapHeight + 20 : constraints.maxHeight,
+                child: _buildRealCarupanoMap(),
+              ),
 
-          if (rideState == 'negotiating')
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: _buildNegotiationPanel(),
-            ),
+              // 2. PANEL SEGÚN EL ESTADO
+              if (rideState == 'idle')
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  top: mapHeight,
+                  child: _buildPassengerForm(),
+                ),
 
-          if (rideState == 'active')
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: _buildActiveRidePanel(),
-            ),
-        ],
+              if (rideState == 'negotiating')
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _buildNegotiationPanel(),
+                ),
+
+              if (rideState == 'active')
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _buildActiveRidePanel(),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -432,10 +443,11 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
           // Selector Vehículo: Moto / Auto / Auto A/C
           Row(
             children: [
@@ -605,8 +617,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   // -------------------------------------------------------------
   // PANEL DE NEGOCIACIÓN CON CHOFERES
