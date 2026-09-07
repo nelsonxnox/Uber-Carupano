@@ -1,0 +1,151 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+class CompletedTrip {
+  final String id;
+  final String passengerName;
+  final String pickupAddress;
+  final String dropoffAddress;
+  final double price;
+  final double distanceKm;
+  final DateTime timestamp;
+  final double passengerRating;
+  final String paymentMethod;
+
+  const CompletedTrip({
+    required this.id,
+    required this.passengerName,
+    required this.pickupAddress,
+    required this.dropoffAddress,
+    required this.price,
+    required this.distanceKm,
+    required this.timestamp,
+    this.passengerRating = 0,
+    this.paymentMethod = 'efectivo',
+  });
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'passengerName': passengerName,
+        'pickupAddress': pickupAddress,
+        'dropoffAddress': dropoffAddress,
+        'price': price,
+        'distanceKm': distanceKm,
+        'timestamp': timestamp.toIso8601String(),
+        'passengerRating': passengerRating,
+        'paymentMethod': paymentMethod,
+      };
+
+  factory CompletedTrip.fromMap(Map<String, dynamic> m) => CompletedTrip(
+        id: m['id']?.toString() ?? '',
+        passengerName: m['passengerName']?.toString() ?? 'Pasajero',
+        pickupAddress: m['pickupAddress']?.toString() ?? '',
+        dropoffAddress: m['dropoffAddress']?.toString() ?? '',
+        price: (m['price'] as num?)?.toDouble() ?? 0,
+        distanceKm: (m['distanceKm'] as num?)?.toDouble() ?? 0,
+        timestamp: m['timestamp'] != null
+            ? DateTime.tryParse(m['timestamp'].toString()) ?? DateTime.now()
+            : DateTime.now(),
+        passengerRating: (m['passengerRating'] as num?)?.toDouble() ?? 0,
+        paymentMethod: m['paymentMethod']?.toString() ?? 'efectivo',
+      );
+}
+
+class TripHistoryService extends ChangeNotifier {
+  static final TripHistoryService _instance = TripHistoryService._();
+  factory TripHistoryService() => _instance;
+  TripHistoryService._();
+
+  static const _prefKey = 'driver_trip_history';
+  final List<CompletedTrip> _trips = [];
+
+  List<CompletedTrip> get trips => List.unmodifiable(_trips);
+
+  double get totalEarnings =>
+      _trips.fold(0.0, (sum, t) => sum + t.price);
+
+  double get averageRating {
+    final rated = _trips.where((t) => t.passengerRating > 0).toList();
+    if (rated.isEmpty) return 0;
+    return rated.fold(0.0, (sum, t) => sum + t.passengerRating) / rated.length;
+  }
+
+  Future<void> load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefKey);
+      if (raw != null) {
+        final list = json.decode(raw) as List<dynamic>;
+        _trips.clear();
+        _trips.addAll(list.map((e) => CompletedTrip.fromMap(e as Map<String, dynamic>)));
+        _trips.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('TripHistoryService load error: $e');
+    }
+  }
+
+  Future<void> addTrip({
+    required String driverId,
+    required CompletedTrip trip,
+  }) async {
+    _trips.insert(0, trip);
+    notifyListeners();
+    await _persist();
+    try {
+      await FirebaseFirestore.instance
+          .collection('drivers')
+          .doc(driverId)
+          .collection('trips')
+          .doc(trip.id)
+          .set(trip.toMap());
+    } catch (e) {
+      debugPrint('TripHistoryService Firestore error: $e');
+    }
+  }
+
+  Future<void> updateLatestTripRating({
+    required String driverId,
+    required double rating,
+  }) async {
+    if (_trips.isNotEmpty) {
+      final latest = _trips.first;
+      final updated = CompletedTrip(
+        id: latest.id,
+        passengerName: latest.passengerName,
+        pickupAddress: latest.pickupAddress,
+        dropoffAddress: latest.dropoffAddress,
+        price: latest.price,
+        distanceKm: latest.distanceKm,
+        timestamp: latest.timestamp,
+        passengerRating: rating,
+        paymentMethod: latest.paymentMethod,
+      );
+      _trips[0] = updated;
+      notifyListeners();
+      await _persist();
+      try {
+        await FirebaseFirestore.instance
+            .collection('drivers')
+            .doc(driverId)
+            .collection('trips')
+            .doc(updated.id)
+            .set(updated.toMap(), SetOptions(merge: true));
+      } catch (e) {
+        debugPrint('TripHistoryService Firestore rating error: $e');
+      }
+    }
+  }
+
+  Future<void> _persist() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefKey, json.encode(_trips.map((t) => t.toMap()).toList()));
+    } catch (e) {
+      debugPrint('TripHistoryService persist error: $e');
+    }
+  }
+}

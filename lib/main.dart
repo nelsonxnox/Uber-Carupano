@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_options.dart';
 import 'theme/beach_colors.dart';
 import 'screens/passenger/rider_home_screen.dart';
@@ -49,17 +51,64 @@ class MainMobileFrameScreen extends StatefulWidget {
 
 class _MainMobileFrameScreenState extends State<MainMobileFrameScreen> {
   bool isDriverMode = false;
+  bool _isLoaded = false;
 
-  void _toggleMode() {
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedMode();
+  }
+
+  Future<void> _loadSavedMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getBool('app_is_driver_mode') ?? false;
+      if (mounted) {
+        setState(() {
+          isDriverMode = saved;
+          _isLoaded = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoaded = true);
+    }
+  }
+
+  Future<void> _toggleMode() async {
+    final next = !isDriverMode;
     setState(() {
-      isDriverMode = !isDriverMode;
+      isDriverMode = next;
     });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('app_is_driver_mode', next);
+    } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_isLoaded) {
+      return const Scaffold(
+        backgroundColor: BeachColors.backgroundSand,
+        body: Center(child: CircularProgressIndicator(color: BeachColors.oceanPrimary)),
+      );
+    }
+
+    final screenWidget = isDriverMode
+        ? DriverHomeScreen(onSwitchToPassenger: _toggleMode)
+        : RiderHomeScreen(onSwitchToDriver: _toggleMode);
+
+    final size = MediaQuery.of(context).size;
+    final isDesktopWeb = kIsWeb && size.width > 500;
+
+    if (!isDesktopWeb) {
+      // En celular / APK nativo o navegador móvil: pantalla completa nativa
+      return screenWidget;
+    }
+
+    // En navegador de escritorio: marco simulador de teléfono elegante
     return Scaffold(
-      backgroundColor: const Color(0xFFEDF4F8), // Fondo exterior armónico con el mar
+      backgroundColor: const Color(0xFFEDF4F8),
       body: Center(
         child: Container(
           width: 395,
@@ -80,12 +129,11 @@ class _MainMobileFrameScreenState extends State<MainMobileFrameScreen> {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(40),
-            child: isDriverMode
-                ? DriverHomeScreen(onSwitchToPassenger: _toggleMode)
-                : RiderHomeScreen(onSwitchToDriver: _toggleMode),
+            child: screenWidget,
           ),
         ),
       ),
     );
   }
 }
+

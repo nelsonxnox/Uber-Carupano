@@ -1,1 +1,25 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"carupano-drivers","appId":"1:493972626457:android:7da2838c51fd7bf0a69e88","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"carupano-drivers","configurations":{"android":"1:493972626457:android:7da2838c51fd7bf0a69e88","web":"1:493972626457:web:f37e4b344986c61ea69e88"}}}}}}
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "carupano-drivers",
+          "appId": "1:493972626457:android:7da2838c51fd7bf0a69e88",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "carupano-drivers",
+          "configurations": {
+            "android": "1:493972626457:android:7da2838c51fd7bf0a69e88",
+            "web": "1:493972626457:web:f37e4b344986c61ea69e88"
+          }
+        }
+      }
+    }
+  }
+}

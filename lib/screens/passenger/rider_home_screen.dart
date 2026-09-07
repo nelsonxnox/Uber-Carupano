@@ -1,9 +1,15 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import '../../theme/beach_colors.dart';
+import '../../services/ride_service.dart';
+import '../../services/trip_history_service.dart';
+import 'address_search_screen.dart';
 
 class RiderHomeScreen extends StatefulWidget {
   final VoidCallback onSwitchToDriver;
@@ -20,49 +26,85 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   // Lugares Clave y Frecuentes de Carúpano con coordenadas GPS exactas
   static final List<Map<String, dynamic>> _carupanoPlaces = [
     {
+      'title': 'Playa Copey',
+      'shortTitle': 'Playa Copey',
+      'subtitle': 'Sector Balneario Copey (Troncal 9)',
+      'point': const LatLng(10.6710, -63.3058),
+      'icon': Icons.beach_access,
+    },
+    {
       'title': 'Plaza Bolívar (Centro)',
-      'subtitle': 'Calle Independencia',
+      'shortTitle': 'Plaza Bolívar',
+      'subtitle': 'Calle Independencia / Casco Central',
       'point': const LatLng(10.6678, -63.2585),
       'icon': Icons.account_balance,
     },
     {
-      'title': 'Playa Copey',
-      'subtitle': 'Sector Balneario Copey',
-      'point': const LatLng(10.6820, -63.2380),
-      'icon': Icons.beach_access,
+      'title': 'Catedral Santa Rosa de Lima',
+      'shortTitle': 'Catedral',
+      'subtitle': 'Calle Las Flores / Centro',
+      'point': const LatLng(10.6649, -63.2483),
+      'icon': Icons.church,
+    },
+    {
+      'title': 'Playa Grande',
+      'shortTitle': 'Playa Grande',
+      'subtitle': 'Sector Turístico Playa Grande',
+      'point': const LatLng(10.6550, -63.2850),
+      'icon': Icons.waves,
+    },
+    {
+      'title': 'Malecón / Av. Perimetral',
+      'shortTitle': 'Malecón',
+      'subtitle': 'Paseo Marítimo de Carúpano',
+      'point': const LatLng(10.6690, -63.2550),
+      'icon': Icons.water,
     },
     {
       'title': 'Hospital Dominicci',
+      'shortTitle': 'Hosp. Dominicci',
       'subtitle': 'Santos Aníbal Dominicci',
       'point': const LatLng(10.6610, -63.2550),
       'icon': Icons.local_hospital,
     },
     {
       'title': 'Terminal de Pasajeros',
+      'shortTitle': 'Terminal',
       'subtitle': 'Avenida Universitaria',
       'point': const LatLng(10.6550, -63.2680),
       'icon': Icons.directions_bus,
     },
     {
       'title': 'Mercado Municipal',
+      'shortTitle': 'Mercado',
       'subtitle': 'Casco Central de Carúpano',
       'point': const LatLng(10.6698, -63.2530),
       'icon': Icons.storefront,
     },
     {
-      'title': 'Playa Grande',
-      'subtitle': 'Sector Playa Grande',
-      'point': const LatLng(10.6480, -63.2850),
-      'icon': Icons.waves,
+      'title': 'Puerto Pesquero (Muelle)',
+      'shortTitle': 'Puerto Pesquero',
+      'subtitle': 'Zona Portuaria Tradicional',
+      'point': const LatLng(10.6730, -63.2510),
+      'icon': Icons.anchor,
+    },
+    {
+      'title': 'Balneario El Chuare',
+      'shortTitle': 'El Chuare',
+      'subtitle': 'Río de Macarapana',
+      'point': const LatLng(10.6503, -63.2011),
+      'icon': Icons.nature_people,
     },
     {
       'title': 'El Muco',
+      'shortTitle': 'El Muco',
       'subtitle': 'Avenida Principal del Muco',
       'point': const LatLng(10.6590, -63.2420),
       'icon': Icons.location_city,
     },
     {
       'title': 'Guaca',
+      'shortTitle': 'Guaca',
       'subtitle': 'Pueblo Costero de Guaca',
       'point': const LatLng(10.6420, -63.3100),
       'icon': Icons.sailing,
@@ -71,7 +113,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
   // Puntos interactivos actuales
   LatLng _originPoint = const LatLng(10.6678, -63.2585); // Plaza Bolívar
-  LatLng _destinationPoint = const LatLng(10.6820, -63.2380); // Playa Copey
+  LatLng _destinationPoint = const LatLng(10.6710, -63.3058); // Playa Copey (Troncal 9 Oeste)
   bool _isGpsLocating = false;
 
   // Selección de modo al tocar el mapa ('origin' o 'destination')
@@ -117,15 +159,34 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   List<Map<String, dynamic>> driverOffers = [];
   Map<String, dynamic>? acceptedDriver;
 
+  // Trazado de ruta real por calles (OSRM)
+  List<LatLng> _routePoints = [];
+  double _roadDistanceKm = 0.0;
+  double _roadDurationMin = 0.0;
+  bool _isLoadingRoute = false;
+
+  // Posición real del conductor y ruta hasta el punto de recogida
+  LatLng? _driverCurrentPoint;
+  List<LatLng> _driverToPickupRoutePoints = [];
+
+  // Instancia de RideService para sincronización en tiempo real con el Conductor
+  final RideService _rideService = RideService();
+
+  // Búsqueda de direcciones con Nominatim (OpenStreetMap)
+  Timer? _searchDebounce;
+
   @override
   void initState() {
     super.initState();
-    _recalculateDistanceAndPrice();
+    _rideService.addListener(_onPassengerRideServiceChanged);
+    _fetchRoadRoute();
     _requestGpsLocation();
   }
 
   @override
   void dispose() {
+    _rideService.removeListener(_onPassengerRideServiceChanged);
+    _searchDebounce?.cancel();
     _originController.dispose();
     _destController.dispose();
     _noteController.dispose();
@@ -133,9 +194,254 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     super.dispose();
   }
 
+  void _onPassengerRideServiceChanged() {
+    if (!mounted) return;
+    final cur = _rideService.currentPassengerRide;
+    if (cur != null) {
+      setState(() {
+        if (cur.status == 'accepted' || cur.status == 'arrived' || cur.status == 'in_progress') {
+          rideState = 'active';
+          if (cur.acceptedOffer != null) {
+            acceptedDriver = {
+              'id': cur.acceptedOffer!.id,
+              'name': cur.acceptedOffer!.driverName,
+              'rating': cur.acceptedOffer!.rating,
+              'ridesCount': cur.acceptedOffer!.totalRides,
+              'vehicle': cur.acceptedOffer!.driverVehicle,
+              'plate': cur.acceptedOffer!.driverPlate,
+              'eta': cur.acceptedOffer!.eta,
+              'price': cur.acceptedOffer!.price,
+              'isCounterOffer': cur.acceptedOffer!.isCounterOffer,
+              'driverLat': cur.acceptedOffer!.driverLat ?? cur.currentDriverLocation?.latitude,
+              'driverLon': cur.acceptedOffer!.driverLon ?? cur.currentDriverLocation?.longitude,
+            };
+
+            // Si tenemos la ubicación del conductor, trazar la ruta hacia la recogida
+            final dLat = cur.currentDriverLocation?.latitude ?? cur.acceptedOffer!.driverLat;
+            final dLon = cur.currentDriverLocation?.longitude ?? cur.acceptedOffer!.driverLon;
+            if (dLat != null && dLon != null) {
+              final newDriverLoc = LatLng(dLat, dLon);
+              if (_driverCurrentPoint == null ||
+                  _driverCurrentPoint!.latitude != newDriverLoc.latitude ||
+                  _driverCurrentPoint!.longitude != newDriverLoc.longitude) {
+                _driverCurrentPoint = newDriverLoc;
+                _fetchDriverToPickupRoute(newDriverLoc, cur.pickupPoint);
+              }
+            }
+          }
+        } else if (cur.status == 'completed') {
+          // Viaje finalizado con éxito
+          final driverN = cur.acceptedOffer?.driverName ?? 'El conductor';
+          final driverId = cur.acceptedOffer?.id ?? 'driver_me';
+          final finalPrice = cur.acceptedOffer?.price ?? cur.offeredPrice;
+          rideState = 'idle';
+          acceptedDriver = null;
+          driverOffers.clear();
+          _driverToPickupRoutePoints.clear();
+          _driverCurrentPoint = null;
+
+          double selectedRating = 5.0;
+
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => StatefulBuilder(
+              builder: (context, setDialogState) => AlertDialog(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                title: const Row(
+                  children: [
+                    Icon(Icons.stars_rounded, color: BeachColors.softAmber, size: 28),
+                    SizedBox(width: 8),
+                    Text('¡Llegaste a tu destino!'),
+                  ],
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '$driverN ha finalizado el viaje.',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Total a pagar: \$${finalPrice.toStringAsFixed(2)} USD',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: BeachColors.emeraldSuccess),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      '¿Cómo estuvo tu experiencia?',
+                      style: TextStyle(fontSize: 12, color: BeachColors.textSecondary),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(5, (index) {
+                        final starValue = index + 1.0;
+                        return IconButton(
+                          icon: Icon(
+                            starValue <= selectedRating ? Icons.star_rounded : Icons.star_outline_rounded,
+                            color: const Color(0xFFF59E0B),
+                            size: 32,
+                          ),
+                          onPressed: () {
+                            setDialogState(() {
+                              selectedRating = starValue;
+                            });
+                          },
+                        );
+                      }),
+                    ),
+                  ],
+                ),
+                actions: [
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: BeachColors.oceanPrimary,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: () {
+                      TripHistoryService().updateLatestTripRating(
+                        driverId: driverId,
+                        rating: selectedRating,
+                      );
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('¡Gracias por calificar a $driverN con ${selectedRating.toInt()} estrellas!'),
+                          backgroundColor: BeachColors.emeraldSuccess,
+                        ),
+                      );
+                    },
+                    child: const Text('Enviar Calificación', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ),
+          );
+        } else {
+          // En modo negociación o búsqueda, reflejar siempre la lista actualizada de ofertas
+          if (cur.status == 'negotiating' || cur.status == 'searching') {
+            rideState = 'negotiating';
+            driverOffers = cur.offers.map((off) {
+              return {
+                'id': off.id,
+                'name': off.driverName,
+                'rating': off.rating,
+                'ridesCount': off.totalRides,
+                'vehicle': off.driverVehicle,
+                'plate': off.driverPlate,
+                'eta': off.eta,
+                'price': off.price,
+                'isCounterOffer': off.isCounterOffer,
+                'driverLat': off.driverLat,
+                'driverLon': off.driverLon,
+              };
+            }).toList();
+          }
+        }
+      });
+    }
+  }
+
+  Future<void> _fetchDriverToPickupRoute(LatLng driverLoc, LatLng pickupLoc) async {
+    try {
+      final url = Uri.parse(
+        'https://router.project-osrm.org/route/v1/driving/'
+        '${driverLoc.longitude},${driverLoc.latitude};${pickupLoc.longitude},${pickupLoc.latitude}'
+        '?overview=full&geometries=geojson',
+      );
+      final response = await http.get(url).timeout(const Duration(seconds: 4));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['code'] == 'Ok' && data['routes'] != null && (data['routes'] as List).isNotEmpty) {
+          final coordinates = data['routes'][0]['geometry']['coordinates'] as List;
+          final durationSec = (data['routes'][0]['duration'] as num).toDouble();
+          final durationMin = math.max(1, (durationSec / 60).round());
+          final points = coordinates.map<LatLng>((coord) {
+            return LatLng((coord[1] as num).toDouble(), (coord[0] as num).toDouble());
+          }).toList();
+
+          if (mounted) {
+            setState(() {
+              _driverToPickupRoutePoints = points;
+              if (acceptedDriver != null) {
+                acceptedDriver!['eta'] = '$durationMin min';
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Driver-to-pickup route error: $e');
+    }
+  }
+
   // -------------------------------------------------------------
-  // MATEMÁTICA Y FÓRMULA DE DISTANCIA (Fórmula Haversine en km)
+  // RUTEO REAL POR CALLES DE CARÚPANO (OSRM API + FALLBACK HAVERSINE)
   // -------------------------------------------------------------
+  Future<void> _fetchRoadRoute() async {
+    setState(() {
+      _isLoadingRoute = true;
+    });
+
+    final origin = _originPoint;
+    final dest = _destinationPoint;
+
+    try {
+      final url = Uri.parse(
+        'https://router.project-osrm.org/route/v1/driving/'
+        '${origin.longitude},${origin.latitude};${dest.longitude},${dest.latitude}'
+        '?overview=full&geometries=geojson',
+      );
+
+      final response = await http.get(url).timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['code'] == 'Ok' &&
+            data['routes'] != null &&
+            (data['routes'] as List).isNotEmpty) {
+          final route = data['routes'][0];
+          final distanceMeters = (route['distance'] as num).toDouble();
+          final durationSeconds = (route['duration'] as num).toDouble();
+          final geometry = route['geometry'];
+          final coordinates = geometry['coordinates'] as List;
+
+          final List<LatLng> points = coordinates.map<LatLng>((coord) {
+            final double lon = (coord[0] as num).toDouble();
+            final double lat = (coord[1] as num).toDouble();
+            return LatLng(lat, lon);
+          }).toList();
+
+          if (mounted) {
+            setState(() {
+              _roadDistanceKm = distanceMeters / 1000.0;
+              _roadDurationMin = durationSeconds / 60.0;
+              _routePoints = points;
+              _isLoadingRoute = false;
+            });
+            _updateFareCalculation();
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('OSRM routing fallback to urban curve math: $e');
+    }
+
+    // Fallback de contingencia (sin conexión): Haversine con multiplicador urbano
+    if (mounted) {
+      final double fallbackKm = _calculateDistanceKm(origin, dest);
+      setState(() {
+        _roadDistanceKm = fallbackKm;
+        _roadDurationMin = fallbackKm * 3.2;
+        _routePoints = [origin, dest];
+        _isLoadingRoute = false;
+      });
+      _updateFareCalculation();
+    }
+  }
+
+  // Matemática auxiliar de respaldo (Haversine con factor curvas de Carúpano)
   double _calculateDistanceKm(LatLng p1, LatLng p2) {
     const double earthRadiusKm = 6371.0;
     final double dLat = _degreesToRadians(p2.latitude - p1.latitude);
@@ -148,8 +454,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         math.sin(dLon / 2) * math.sin(dLon / 2) * math.cos(lat1) * math.cos(lat2);
     final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
 
-    // Multiplicador de trazado urbano de Carúpano (curvas de calles ~1.28)
-    return (earthRadiusKm * c) * 1.28;
+    return (earthRadiusKm * c) * 1.32;
   }
 
   double _degreesToRadians(double degrees) {
@@ -157,14 +462,17 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   }
 
   // -------------------------------------------------------------
-  // FÓRMULA DE TARIFA SUGERIDA SEGÚN VEHÍCULO Y DISTANCIA
+  // FÓRMULA DE TARIFA SUGERIDA SEGÚN VEHÍCULO Y KILOMETRAJE REAL
   // -------------------------------------------------------------
-  void _recalculateDistanceAndPrice() {
-    final double km = _calculateDistanceKm(_originPoint, _destinationPoint);
+  void _updateFareCalculation() {
+    final double km = _roadDistanceKm > 0
+        ? _roadDistanceKm
+        : _calculateDistanceKm(_originPoint, _destinationPoint);
+
     double suggestedPrice = 2.0;
 
     if (selectedVehicle == 'moto') {
-      // Base: $2.00 hasta 2.5 km. Después $0.50 por km adicional
+      // Base: $2.00 hasta 2.5 km de recorrido real. Después $0.50 por km adicional
       if (km <= 2.5) {
         suggestedPrice = 2.00;
       } else {
@@ -178,7 +486,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         suggestedPrice = 4.00 + ((km - 3.0) * 0.80);
       }
     } else if (selectedVehicle == 'auto_ac') {
-      // Base: $5.50 hasta 3 km con A/C. Después $1.00 por km adicional
+      // Base: $5.50 hasta 3 km con aire acondicionado. Después $1.00 por km adicional
       if (km <= 3.0) {
         suggestedPrice = 5.50;
       } else {
@@ -194,7 +502,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     });
   }
 
-  // Al tocar el mapa, mover el pin según el modo activo
+  // Al tocar el mapa, mover el pin según el modo activo y recalcular ruta de calles
   void _onMapTapped(TapPosition tapPosition, LatLng point) {
     setState(() {
       if (_mapTapMode == 'destination') {
@@ -207,7 +515,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             'Punto en mapa (${point.latitude.toStringAsFixed(3)}, ${point.longitude.toStringAsFixed(3)})';
       }
     });
-    _recalculateDistanceAndPrice();
+    _fetchRoadRoute();
   }
 
   // Seleccionar un lugar frecuente de Carúpano
@@ -221,7 +529,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         _originController.text = place['title'] as String;
       }
     });
-    _recalculateDistanceAndPrice();
+    _fetchRoadRoute();
     _mapController.move(place['point'] as LatLng, 14.5);
   }
 
@@ -244,7 +552,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             _originController.text = 'Mi Ubicación actual (GPS)';
             _isGpsLocating = false;
           });
-          _recalculateDistanceAndPrice();
+          _fetchRoadRoute();
           _mapController.move(_originPoint, 15.0);
         }
         return;
@@ -257,11 +565,61 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     }
   }
 
+  Future<void> _openAddressSearch({required bool isDestination}) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddressSearchScreen(
+          initialOrigin: _originController.text,
+          initialDestination: _destController.text,
+          originPoint: _originPoint,
+          destinationPoint: _destinationPoint,
+          startWithDestination: isDestination,
+          popularPlaces: _carupanoPlaces,
+        ),
+      ),
+    );
+
+    if (result == null) return;
+
+    if (result is AddressSelectionResult) {
+      if (result.chooseOnMap) {
+        setState(() {
+          _mapTapMode = result.mapMode ?? (isDestination ? 'destination' : 'origin');
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                _mapTapMode == 'destination'
+                    ? 'Toca en el mapa para marcar el destino'
+                    : 'Toca en el mapa para marcar la recogida',
+                style: const TextStyle(fontSize: 12),
+              ),
+              duration: const Duration(seconds: 2),
+              backgroundColor: BeachColors.oceanPrimary,
+            ),
+          );
+        }
+        return;
+      }
+
+      setState(() {
+        _originPoint = result.originPoint;
+        _originController.text = result.originText;
+        _destinationPoint = result.destinationPoint;
+        _destController.text = result.destinationText;
+      });
+      _fetchRoadRoute();
+      _mapController.move(isDestination ? result.destinationPoint : result.originPoint, 14.5);
+    }
+  }
+
   void _onVehicleChanged(String vehicle) {
     setState(() {
       selectedVehicle = vehicle;
     });
-    _recalculateDistanceAndPrice();
+    _updateFareCalculation();
   }
 
   void _adjustFare(double delta) {
@@ -281,46 +639,37 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
     final double passengerFare = double.tryParse(_fareController.text) ?? 2.50;
 
-    Future.delayed(const Duration(milliseconds: 1000), () {
-      if (!mounted || rideState != 'negotiating') return;
-      setState(() {
-        driverOffers.add({
-          'id': 'd1',
-          'name': 'Carlos Rodríguez',
-          'rating': 4.9,
-          'ridesCount': 342,
-          'vehicle': selectedVehicle == 'moto'
-              ? 'Bera SBR 150 (Azul)'
-              : 'Toyota Corolla (Plata)',
-          'plate': 'AE5K82M',
-          'eta': '2 min (a 400m)',
-          'price': passengerFare,
-          'isCounterOffer': false,
-        });
-      });
-    });
-
-    Future.delayed(const Duration(milliseconds: 2400), () {
-      if (!mounted || rideState != 'negotiating') return;
-      setState(() {
-        driverOffers.add({
-          'id': 'd2',
-          'name': 'José Gregorio Farías',
-          'rating': 4.8,
-          'ridesCount': 189,
-          'vehicle': selectedVehicle == 'moto'
-              ? 'Empire Keeway (Rojo)'
-              : 'Chery Orinoco (Blanco)',
-          'plate': 'AB7P91X',
-          'eta': '4 min (a 800m)',
-          'price': passengerFare + 0.50,
-          'isCounterOffer': true,
-        });
-      });
-    });
+    // 1. Notificar en vivo al panel de conductores vía RideService & Firestore
+    _rideService.requestRide(
+      passengerName: 'Nelson (Pasajero)',
+      pickupAddress: _originController.text,
+      pickupPoint: _originPoint,
+      dropoffAddress: _destController.text,
+      dropoffPoint: _destinationPoint,
+      offeredPrice: passengerFare,
+      vehicleType: selectedVehicle,
+      paymentMethod: selectedPayment,
+      distanceKm: _roadDistanceKm > 0 ? _roadDistanceKm : 2.5,
+      note: _noteController.text,
+    );
   }
 
   void _acceptDriver(Map<String, dynamic> driver) {
+    final cur = _rideService.currentPassengerRide;
+    if (cur != null) {
+      final offer = DriverOffer(
+        id: driver['id']?.toString() ?? 'd1',
+        driverName: driver['name']?.toString() ?? 'Conductor',
+        driverVehicle: driver['vehicle']?.toString() ?? 'Bera SBR',
+        driverPlate: driver['plate']?.toString() ?? 'AE5K82M',
+        rating: (driver['rating'] as num?)?.toDouble() ?? 4.9,
+        totalRides: (driver['ridesCount'] as num?)?.toInt() ?? 200,
+        price: (driver['price'] as num?)?.toDouble() ?? 2.50,
+        eta: driver['eta']?.toString() ?? '2 min',
+      );
+      _rideService.acceptOffer(rideId: cur.id, offer: offer);
+    }
+
     setState(() {
       acceptedDriver = driver;
       rideState = 'active';
@@ -328,6 +677,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   }
 
   void _resetRide() {
+    _rideService.cancelCurrentPassengerRide();
     setState(() {
       rideState = 'idle';
       acceptedDriver = null;
@@ -339,6 +689,19 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     if (selectedVehicle == 'moto') return 'MOTO';
     if (selectedVehicle == 'auto') return 'AUTO';
     return 'AUTO A/C';
+  }
+
+  // Estimación del tiempo de trayecto según el vehículo seleccionado
+  // Moto: ~25% más rápida esquivando tráfico en calles de Carúpano
+  int get _calculatedDurationMin {
+    if (_roadDurationMin <= 0) return 3;
+    if (selectedVehicle == 'moto') {
+      return math.max(2, (_roadDurationMin * 0.75).round());
+    } else if (selectedVehicle == 'auto') {
+      return math.max(3, _roadDurationMin.round());
+    } else {
+      return math.max(3, (_roadDurationMin * 1.05).round());
+    }
   }
 
   @override
@@ -461,17 +824,14 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   // MAPA REAL E INTERACTIVO: TRAZADO DE RUTA, DISTANCIA Y PINES
   // -------------------------------------------------------------
   Widget _buildInteractiveCarupanoMap() {
-    final double tripDistance =
-        _calculateDistanceKm(_originPoint, _destinationPoint);
-
     return Stack(
       children: [
         FlutterMap(
           mapController: _mapController,
           options: MapOptions(
-            initialCenter: _originPoint,
-            initialZoom: 14.5,
-            minZoom: 11.0,
+            initialCenter: const LatLng(10.6680, -63.2800), // Centro panorámico entre Plaza Bolívar y Playa Copey
+            initialZoom: 13.2,
+            minZoom: 10.0,
             maxZoom: 18.0,
             onTap: _onMapTapped,
           ),
@@ -481,21 +841,34 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               userAgentPackageName: 'com.carupano.riders',
             ),
 
-            // Trazado de Ruta Visual (Línea de viaje en color azul océano)
+            // Trazado de Ruta Visual por Calles Reales (OSRM Polyline)
             PolylineLayer(
               polylines: [
-                Polyline(
-                  points: [
-                    _originPoint,
-                    LatLng(
-                      (_originPoint.latitude + _destinationPoint.latitude) / 2,
-                      (_originPoint.longitude + _destinationPoint.longitude) / 2 + 0.002,
-                    ),
-                    _destinationPoint,
-                  ],
-                  strokeWidth: 4.5,
-                  color: BeachColors.oceanPrimary,
-                ),
+                // 1. Ruta del viaje general (Recogida -> Destino)
+                if (_routePoints.isNotEmpty)
+                  Polyline(
+                    points: _routePoints,
+                    strokeWidth: 4.8,
+                    color: BeachColors.oceanPrimary,
+                    borderColor: const Color(0xFF0369A1),
+                    borderStrokeWidth: 1.2,
+                  )
+                else
+                  Polyline(
+                    points: [_originPoint, _destinationPoint],
+                    strokeWidth: 3.5,
+                    color: BeachColors.oceanPrimary.withValues(alpha: 0.6),
+                  ),
+
+                // 2. Ruta en vivo del Conductor hacia el punto de recogida (cuando viaje está activo)
+                if (rideState == 'active' && _driverToPickupRoutePoints.isNotEmpty)
+                  Polyline(
+                    points: _driverToPickupRoutePoints,
+                    strokeWidth: 4.5,
+                    color: BeachColors.emeraldSuccess,
+                    borderColor: const Color(0xFF047857),
+                    borderStrokeWidth: 1.2,
+                  ),
               ],
             ),
 
@@ -592,49 +965,95 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                   ),
                 ),
 
-                // 3. Marcadores de Mototaxis reales en Carúpano
-                ..._nearbyMotos.map((moto) {
-                  return Marker(
-                    point: moto['point'] as LatLng,
-                    width: 120,
-                    height: 38,
+                // 3. Marcador en Tiempo Real del Conductor Asignado
+                if (rideState == 'active' && _driverCurrentPoint != null)
+                  Marker(
+                    point: _driverCurrentPoint!,
+                    width: 130,
+                    height: 52,
                     child: Column(
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                           decoration: BoxDecoration(
-                            color: BeachColors.pureWhite,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: BeachColors.lagoonBorder),
+                            color: BeachColors.emeraldSuccess,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white, width: 2),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.1),
-                                blurRadius: 4,
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 6,
                               ),
                             ],
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.two_wheeler,
-                                  color: moto['color'] as Color, size: 13),
+                              const Icon(Icons.two_wheeler, color: Colors.white, size: 14),
                               const SizedBox(width: 4),
-                              Text(
-                                '${moto['name']}',
-                                style: const TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w600,
-                                  color: BeachColors.textMain,
+                              Flexible(
+                                child: Text(
+                                  acceptedDriver != null ? '${acceptedDriver!['name']}' : 'Conductor',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ),
                             ],
                           ),
                         ),
+                        const Icon(Icons.arrow_drop_down, color: BeachColors.emeraldSuccess, size: 16),
                       ],
                     ),
-                  );
-                }),
+                  ),
+
+                // 4. Marcadores de Mototaxis en Carúpano (solo si no hay viaje activo)
+                if (rideState != 'active')
+                  ..._nearbyMotos.map((moto) {
+                    return Marker(
+                      point: moto['point'] as LatLng,
+                      width: 120,
+                      height: 38,
+                      child: Column(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: BeachColors.pureWhite,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: BeachColors.lagoonBorder),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.1),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.two_wheeler,
+                                    color: moto['color'] as Color, size: 13),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${moto['name']}',
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w600,
+                                    color: BeachColors.textMain,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
               ],
             ),
           ],
@@ -660,17 +1079,53 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.route,
-                    color: BeachColors.oceanPrimary, size: 14),
-                const SizedBox(width: 5),
-                Text(
-                  '${tripDistance.toStringAsFixed(1)} km  •  ~${(tripDistance * 3.2).round()} min',
-                  style: const TextStyle(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w700,
-                    color: BeachColors.textMain,
+                if (_isLoadingRoute) ...[
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: BeachColors.oceanPrimary,
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 6),
+                  const Text(
+                    'Trazando calles...',
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      color: BeachColors.textSecondary,
+                    ),
+                  ),
+                ] else ...[
+                  const Icon(Icons.alt_route,
+                      color: BeachColors.oceanPrimary, size: 14),
+                  const SizedBox(width: 5),
+                  Text(
+                    '${_roadDistanceKm.toStringAsFixed(1)} km  •  ~$_calculatedDurationMin min',
+                    style: const TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      color: BeachColors.textMain,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: BeachColors.oceanLight,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text(
+                      'Calles',
+                      style: TextStyle(
+                        fontSize: 8.5,
+                        fontWeight: FontWeight.w700,
+                        color: BeachColors.oceanPrimary,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -836,6 +1291,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               iconColor: BeachColors.oceanPrimary,
               controller: _originController,
               hint: 'Punto de recogida',
+              readOnly: true,
+              onTap: () => _openAddressSearch(isDestination: false),
             ),
             const SizedBox(height: 6),
             _buildCleanInput(
@@ -843,6 +1300,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               iconColor: const Color(0xFFEF4444),
               controller: _destController,
               hint: '¿A dónde vas en Carúpano?',
+              readOnly: true,
+              onTap: () => _openAddressSearch(isDestination: true),
             ),
             const SizedBox(height: 6),
             _buildCleanInput(
@@ -1189,6 +1648,26 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   Widget _buildActiveRidePanel() {
     if (acceptedDriver == null) return const SizedBox();
 
+    final cur = _rideService.currentPassengerRide;
+    final status = cur?.status ?? 'accepted';
+
+    String statusTitle = 'En camino (${acceptedDriver!['eta']})';
+    IconData statusIcon = Icons.two_wheeler;
+    Color statusBg = BeachColors.oceanLight;
+    Color statusFg = BeachColors.oceanPrimary;
+
+    if (status == 'arrived') {
+      statusTitle = '¡El conductor ha llegado al punto de recogida!';
+      statusIcon = Icons.location_on;
+      statusBg = const Color(0xFFD1FAE5);
+      statusFg = BeachColors.emeraldSuccess;
+    } else if (status == 'in_progress') {
+      statusTitle = 'Viaje en curso rumbo al destino';
+      statusIcon = Icons.navigation;
+      statusBg = const Color(0xFFE0F2FE);
+      statusFg = BeachColors.oceanPrimary;
+    }
+
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
       decoration: const BoxDecoration(
@@ -1208,21 +1687,20 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: BeachColors.oceanLight,
+              color: statusBg,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
               children: [
-                const Icon(Icons.two_wheeler,
-                    color: BeachColors.oceanPrimary, size: 18),
+                Icon(statusIcon, color: statusFg, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'En camino (${acceptedDriver!['eta']})',
-                    style: const TextStyle(
+                    statusTitle,
+                    style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
-                      color: BeachColors.oceanPrimary,
+                      color: statusFg,
                     ),
                   ),
                 ),
@@ -1408,33 +1886,42 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     required Color iconColor,
     required TextEditingController controller,
     required String hint,
+    VoidCallback? onTap,
+    bool readOnly = false,
   }) {
-    return Container(
-      height: 38,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: BeachColors.backgroundSand,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: BeachColors.lagoonBorder),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: iconColor, size: 15),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              style: const TextStyle(fontSize: 12, color: BeachColors.textMain),
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                isDense: true,
-                hintText: hint,
-                hintStyle:
-                    const TextStyle(color: BeachColors.textMuted, fontSize: 11.5),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: BeachColors.backgroundSand,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: BeachColors.lagoonBorder),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: iconColor, size: 15),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: controller,
+                readOnly: readOnly,
+                onTap: onTap,
+                style: const TextStyle(fontSize: 12, color: BeachColors.textMain),
+                decoration: InputDecoration(
+                  border: InputBorder.none,
+                  isDense: true,
+                  hintText: hint,
+                  hintStyle:
+                      const TextStyle(color: BeachColors.textMuted, fontSize: 11.5),
+                ),
               ),
             ),
-          ),
-        ],
+            if (onTap != null)
+              const Icon(Icons.search, size: 14, color: BeachColors.textMuted),
+          ],
+        ),
       ),
     );
   }
