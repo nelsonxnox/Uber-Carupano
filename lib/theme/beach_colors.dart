@@ -18,4 +18,5 @@ class BeachColors {
   static const Color textMuted = Color(0xFF94A3B8);    // Gris claro sutil
   
   static const Color emeraldSuccess = Color(0xFF10B981);
+  static const Color softAmber = Color(0xFFF59E0B);
 }
