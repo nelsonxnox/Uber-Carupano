@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:geolocator/geolocator.dart';
 import '../../theme/beach_colors.dart';
 
 class RiderHomeScreen extends StatefulWidget {
@@ -11,6 +14,34 @@ class RiderHomeScreen extends StatefulWidget {
 
 class _RiderHomeScreenState extends State<RiderHomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final MapController _mapController = MapController();
+
+  // Coordenadas reales de Carúpano, Estado Sucre, Venezuela
+  static const LatLng _carupanoCenter = LatLng(10.6678, -63.2585);
+  LatLng _currentLocation = _carupanoCenter;
+  bool _isGpsLocating = false;
+
+  // Mototaxis simuladas en calles reales de Carúpano
+  final List<Map<String, dynamic>> _nearbyMotos = [
+    {
+      'name': 'Bera SBR (Azul)',
+      'eta': '2 min',
+      'point': const LatLng(10.6695, -63.2570), // Cerca de Plaza Colón
+      'color': BeachColors.oceanPrimary,
+    },
+    {
+      'name': 'Empire Keeway (Roja)',
+      'eta': '4 min',
+      'point': const LatLng(10.6655, -63.2595), // Cerca de Calle Independencia
+      'color': const Color(0xFFE11D48),
+    },
+    {
+      'name': 'Bera 150 (Negra)',
+      'eta': '3 min',
+      'point': const LatLng(10.6688, -63.2610), // Av. Perimetral / Puerto
+      'color': const Color(0xFF0F172A),
+    },
+  ];
 
   String selectedVehicle = 'moto'; // 'moto', 'auto', 'auto_ac'
   String selectedPayment = 'pago_movil'; // 'pago_movil', 'efectivo'
@@ -31,12 +62,49 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   Map<String, dynamic>? acceptedDriver;
 
   @override
+  void initState() {
+    super.initState();
+    _requestGpsLocation();
+  }
+
+  @override
   void dispose() {
     _originController.dispose();
     _destController.dispose();
     _noteController.dispose();
     _fareController.dispose();
     super.dispose();
+  }
+
+  // Obtener GPS real del dispositivo (o fallback suave en web/browser)
+  Future<void> _requestGpsLocation() async {
+    setState(() => _isGpsLocating = true);
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.always ||
+          permission == LocationPermission.whileInUse) {
+        final position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 5),
+        );
+        if (mounted) {
+          setState(() {
+            _currentLocation = LatLng(position.latitude, position.longitude);
+            _isGpsLocating = false;
+          });
+          _mapController.move(_currentLocation, 15.5);
+        }
+        return;
+      }
+    } catch (e) {
+      debugPrint('GPS fallback to Carúpano center: $e');
+    }
+    if (mounted) {
+      setState(() => _isGpsLocating = false);
+    }
   }
 
   void _onVehicleChanged(String vehicle) {
@@ -65,7 +133,6 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
     final double passengerFare = double.tryParse(_fareController.text) ?? 2.50;
 
-    // Simular que choferes cercanos en Carúpano responden en segundos
     Future.delayed(const Duration(milliseconds: 1000), () {
       if (!mounted || rideState != 'negotiating') return;
       setState(() {
@@ -169,9 +236,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                   ),
                 ),
                 Text(
-                  'Modo Pasajero',
+                  'Modo Pasajero • Carúpano, Sucre',
                   style: TextStyle(
-                    fontSize: 10.5,
+                    fontSize: 10,
                     color: BeachColors.textSecondary,
                   ),
                 ),
@@ -179,13 +246,27 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Centrar en mi GPS',
+            icon: _isGpsLocating
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.my_location,
+                    color: BeachColors.oceanPrimary, size: 20),
+            onPressed: _requestGpsLocation,
+          ),
+        ],
       ),
       body: Stack(
         children: [
-          // 1. MAPA VISIBLE CON MOTOTAXIS EN CARÚPANO
+          // 1. MAPA REAL DE CARÚPANO (OpenStreetMap interactivo con zoom y arrastre)
           Positioned.fill(
-            bottom: rideState == 'idle' ? 330 : null,
-            child: _buildCarupanoMap(),
+            bottom: rideState == 'idle' ? 335 : null,
+            child: _buildRealCarupanoMap(),
           ),
 
           // 2. PANEL SEGÚN EL ESTADO
@@ -218,134 +299,118 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   }
 
   // -------------------------------------------------------------
-  // MAPA VISUAL CON MOTOS DISPONIBLES EN CARÚPANO
+  // MAPA REAL DE OPENSTREETMAP CON CARÚPANO Y MOTOTAXIS
   // -------------------------------------------------------------
-  Widget _buildCarupanoMap() {
-    return Container(
-      color: const Color(0xFFE2EDF4),
-      child: Stack(
-        children: [
-          // Fondo de calles sutiles
-          CustomPaint(
-            size: Size.infinite,
-            painter: _CarupanoStreetPainter(),
-          ),
+  Widget _buildRealCarupanoMap() {
+    return FlutterMap(
+      mapController: _mapController,
+      options: MapOptions(
+        initialCenter: _currentLocation,
+        initialZoom: 15.0,
+        minZoom: 12.0,
+        maxZoom: 18.0,
+      ),
+      children: [
+        // Capa de mosaicos reales de OpenStreetMap
+        TileLayer(
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          userAgentPackageName: 'com.carupano.riders',
+        ),
 
-          // Etiqueta de ubicación del pasajero (GPS)
-          Positioned(
-            top: 40,
-            left: 20,
-            right: 20,
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                decoration: BoxDecoration(
-                  color: BeachColors.pureWhite,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: BeachColors.lagoonBorder),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.06),
-                      blurRadius: 10,
-                      offset: const Offset(0, 3),
+        // Capa de Marcadores (Tu ubicación y Mototaxis en tiempo real)
+        MarkerLayer(
+          markers: [
+            // Pin de Recogida (Tu Ubicación)
+            Marker(
+              point: _currentLocation,
+              width: 140,
+              height: 48,
+              child: Column(
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: BeachColors.pureWhite,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: BeachColors.oceanPrimary, width: 1.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.1),
+                          blurRadius: 6,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.person_pin_circle,
+                            color: BeachColors.oceanPrimary, size: 14),
+                        SizedBox(width: 4),
+                        Text(
+                          'Tu recogida',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: BeachColors.textMain,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.arrow_drop_down,
+                      color: BeachColors.oceanPrimary, size: 16),
+                ],
+              ),
+            ),
+
+            // Marcadores de Mototaxis reales en Carúpano
+            ..._nearbyMotos.map((moto) {
+              return Marker(
+                point: moto['point'] as LatLng,
+                width: 130,
+                height: 42,
+                child: Column(
                   children: [
-                    const Icon(Icons.my_location,
-                        color: BeachColors.oceanPrimary, size: 15),
-                    const SizedBox(width: 6),
-                    Text(
-                      _originController.text,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 12,
-                        color: BeachColors.textMain,
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: BeachColors.pureWhite,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: BeachColors.lagoonBorder),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.1),
+                            blurRadius: 4,
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.two_wheeler,
+                              color: moto['color'] as Color, size: 13),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${moto['name']} • ${moto['eta']}',
+                            style: const TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w600,
+                              color: BeachColors.textMain,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                    const Icon(Icons.arrow_drop_down,
+                        color: BeachColors.pureWhite, size: 14),
                   ],
                 ),
-              ),
-            ),
-          ),
-
-          // Mototaxi 1 cercano (Bera Azul)
-          Positioned(
-            top: 110,
-            left: 60,
-            child: _buildMotoMarker(
-              name: 'Bera SBR (Azul)',
-              time: '2 min',
-              color: BeachColors.oceanPrimary,
-            ),
-          ),
-
-          // Mototaxi 2 cercano (Empire Roja)
-          Positioned(
-            top: 150,
-            right: 50,
-            child: _buildMotoMarker(
-              name: 'Empire Keeway',
-              time: '4 min',
-              color: const Color(0xFFE11D48),
-            ),
-          ),
-
-          // Mototaxi 3 (Bera Negra)
-          Positioned(
-            top: 200,
-            left: 120,
-            child: _buildMotoMarker(
-              name: 'Bera 150',
-              time: '3 min',
-              color: const Color(0xFF0F172A),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMotoMarker({
-    required String name,
-    required String time,
-    required Color color,
-  }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: BeachColors.pureWhite,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: BeachColors.lagoonBorder),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.08),
-                blurRadius: 6,
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.two_wheeler, color: color, size: 14),
-              const SizedBox(width: 4),
-              Text(
-                '$name • $time',
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: BeachColors.textMain,
-                ),
-              ),
-            ],
-          ),
+              );
+            }),
+          ],
         ),
-        const Icon(Icons.arrow_drop_down, color: BeachColors.pureWhite, size: 14),
       ],
     );
   }
@@ -416,14 +481,14 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             icon: Icons.location_on_outlined,
             iconColor: const Color(0xFFEF4444),
             controller: _destController,
-            hint: '¿A dónde vas?',
+            hint: '¿A dónde vas en Carúpano?',
           ),
           const SizedBox(height: 7),
           _buildCleanInput(
             icon: Icons.notes_outlined,
             iconColor: BeachColors.textSecondary,
             controller: _noteController,
-            hint: 'Nota: "Llevo casco", etc.',
+            hint: 'Nota: "Llevo casco", "Billete de \$20", etc.',
           ),
           const SizedBox(height: 12),
 
@@ -518,7 +583,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Botón Corregido: Limpio y directo
+          // Botón Limpio y directo
           SizedBox(
             width: double.infinity,
             height: 46,
@@ -1127,37 +1192,4 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       ),
     );
   }
-}
-
-// Dibujador de líneas sutiles tipo calles en el mapa de Carúpano
-class _CarupanoStreetPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFFD6E4EE)
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke;
-
-    final path = Path();
-    // Calle principal
-    path.moveTo(0, size.height * 0.4);
-    path.lineTo(size.width, size.height * 0.4);
-
-    // Avenida Bolívar / Costanera
-    path.moveTo(size.width * 0.25, 0);
-    path.lineTo(size.width * 0.25, size.height);
-
-    // Intersección Plaza
-    path.moveTo(size.width * 0.75, 0);
-    path.lineTo(size.width * 0.75, size.height);
-
-    // Diagonal Playa Copey
-    path.moveTo(0, size.height * 0.2);
-    path.lineTo(size.width, size.height * 0.7);
-
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
