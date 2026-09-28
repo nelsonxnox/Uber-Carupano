@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 /// PALETA DE COLORES COSTERA MINIMALISTA (Carúpano Beach Minimal)
 class BeachColors {
   static const Color pureWhite = Color(0xFFFFFFFF);
-  static const Color backgroundSand = Color(0xFFF7FBFD); // Fondo blanco con brisa marina
+  static const Color backgroundSand = Color(0xFFEAF3F9); // Azul marino clarito, suave y descansado para la vista
   static const Color cardSurface = Color(0xFFFFFFFF);
   
   // Azules caribeños suaves (Playa Copey / Carúpano)

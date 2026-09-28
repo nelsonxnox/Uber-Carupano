@@ -6,6 +6,9 @@ import 'firebase_options.dart';
 import 'theme/beach_colors.dart';
 import 'screens/passenger/rider_home_screen.dart';
 import 'screens/driver/driver_home_screen.dart';
+import 'screens/auth/welcome_register_screen.dart';
+import 'services/auth_service.dart';
+import 'services/notification_sound_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,6 +19,14 @@ void main() async {
   } catch (e) {
     debugPrint('Firebase init fallback: $e');
   }
+
+  // Inicializar alertas y notificaciones locales (InDrive Radar & Avisos)
+  try {
+    await NotificationSoundService().init();
+  } catch (e) {
+    debugPrint('NotificationSoundService init fallback: $e');
+  }
+
   runApp(const CarupanoRidersApp());
 }
 
@@ -52,14 +63,27 @@ class MainMobileFrameScreen extends StatefulWidget {
 class _MainMobileFrameScreenState extends State<MainMobileFrameScreen> {
   bool isDriverMode = false;
   bool _isLoaded = false;
+  final AuthService _authService = AuthService();
 
   @override
   void initState() {
     super.initState();
-    _loadSavedMode();
+    _authService.addListener(_onAuthChanged);
+    _initApp();
   }
 
-  Future<void> _loadSavedMode() async {
+  @override
+  void dispose() {
+    _authService.removeListener(_onAuthChanged);
+    super.dispose();
+  }
+
+  void _onAuthChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _initApp() async {
+    await _authService.init();
     try {
       final prefs = await SharedPreferences.getInstance();
       final saved = prefs.getBool('app_is_driver_mode') ?? false;
@@ -94,9 +118,19 @@ class _MainMobileFrameScreenState extends State<MainMobileFrameScreen> {
       );
     }
 
-    final screenWidget = isDriverMode
-        ? DriverHomeScreen(onSwitchToPassenger: _toggleMode)
-        : RiderHomeScreen(onSwitchToDriver: _toggleMode);
+    // Si el pasajero no se ha registrado, mostrar pantalla de inicio / registro estilo InDrive
+    Widget screenWidget;
+    if (!_authService.isAuthenticated) {
+      screenWidget = WelcomeRegisterScreen(
+        onRegistrationSuccess: () {
+          setState(() {});
+        },
+      );
+    } else {
+      screenWidget = isDriverMode
+          ? DriverHomeScreen(onSwitchToPassenger: _toggleMode)
+          : RiderHomeScreen(onSwitchToDriver: _toggleMode);
+    }
 
     final size = MediaQuery.of(context).size;
     final isDesktopWeb = kIsWeb && size.width > 500;
@@ -119,7 +153,7 @@ class _MainMobileFrameScreenState extends State<MainMobileFrameScreen> {
             borderRadius: BorderRadius.circular(44),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF0F2B48).withOpacity(0.08),
+                color: const Color(0xFF0F2B48).withValues(alpha: 0.08),
                 blurRadius: 36,
                 spreadRadius: 2,
                 offset: const Offset(0, 14),

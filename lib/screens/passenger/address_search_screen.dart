@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -153,9 +153,9 @@ class _AddressSearchScreenState extends State<AddressSearchScreen> {
 
     // 2. Consulta en vivo a Nominatim OSM acotada a Carúpano, Sucre, Venezuela
     try {
-      final String encoded = Uri.encodeComponent(query + ', Carúpano, Venezuela');
+      final String encoded = Uri.encodeComponent('$query, Carúpano, Venezuela');
       final url = Uri.parse(
-        'https://nominatim.openstreetmap.org/search?q=' + encoded + '&format=json&countrycodes=ve&viewbox=-63.38,10.60,-63.18,10.75&bounded=0&limit=7&addressdetails=1',
+        'https://nominatim.openstreetmap.org/search?q=$encoded&format=json&countrycodes=ve&viewbox=-63.38,10.60,-63.18,10.75&bounded=0&limit=7&addressdetails=1',
       );
 
       final response = await http.get(
@@ -247,8 +247,10 @@ class _AddressSearchScreenState extends State<AddressSearchScreen> {
     setState(() => _isLoading = true);
     try {
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 5),
+        ),
       );
       if (mounted) {
         setState(() {
@@ -560,7 +562,7 @@ class _AddressSearchScreenState extends State<AddressSearchScreen> {
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 6),
       itemCount: _searchResults.length,
-      separatorBuilder: (_, __) => const Divider(height: 1, color: BeachColors.lagoonBorder, indent: 52),
+      separatorBuilder: (_, _) => const Divider(height: 1, color: BeachColors.lagoonBorder, indent: 52),
       itemBuilder: (ctx, i) {
         final item = _searchResults[i];
         return ListTile(
@@ -606,7 +608,7 @@ class _AddressSearchScreenState extends State<AddressSearchScreen> {
               ),
               const Spacer(),
               Text(
-                'Toca para asignar a ' + (_activeField == 'origin' ? 'Recogida' : 'Destino'),
+                'Toca para asignar a ${_activeField == 'origin' ? 'Recogida' : 'Destino'}',
                 style: const TextStyle(fontSize: 9.5, color: BeachColors.oceanPrimary, fontWeight: FontWeight.w600),
               ),
             ],

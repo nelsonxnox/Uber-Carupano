@@ -64,12 +64,12 @@ class TripHistoryService extends ChangeNotifier {
   List<CompletedTrip> get trips => List.unmodifiable(_trips);
 
   double get totalEarnings =>
-      _trips.fold(0.0, (sum, t) => sum + t.price);
+      _trips.fold(0.0, (acc, t) => acc + t.price);
 
   double get averageRating {
     final rated = _trips.where((t) => t.passengerRating > 0).toList();
     if (rated.isEmpty) return 0;
-    return rated.fold(0.0, (sum, t) => sum + t.passengerRating) / rated.length;
+    return rated.fold(0.0, (acc, t) => acc + t.passengerRating) / rated.length;
   }
 
   Future<void> load() async {

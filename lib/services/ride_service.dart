@@ -360,9 +360,30 @@ class RideService extends ChangeNotifier {
         await FirebaseFirestore.instance.collection('rides').doc(rideId).update({
           'status': newStatus,
         });
+
+        // 🧹 Si el viaje se finalizó o canceló, eliminar los mensajes efímeros del chat
+        if (newStatus == 'completed' || newStatus == 'cancelled') {
+          _cleanRideChatMessages(rideId);
+        }
       } catch (e) {
-        debugPrint('Firestore update status notice: ');
+        debugPrint('Firestore update status notice: $e');
       }
+    }
+  }
+
+  Future<void> _cleanRideChatMessages(String rideId) async {
+    try {
+      final messagesSnap = await FirebaseFirestore.instance
+          .collection('rides')
+          .doc(rideId)
+          .collection('messages')
+          .get();
+      for (final doc in messagesSnap.docs) {
+        await doc.reference.delete();
+      }
+      debugPrint('🧹 Mensajes del chat eliminados para el viaje $rideId');
+    } catch (e) {
+      debugPrint('Error limpiando mensajes de chat: $e');
     }
   }
 

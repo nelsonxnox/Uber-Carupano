@@ -9,7 +9,12 @@ import 'package:http/http.dart' as http;
 import '../../theme/beach_colors.dart';
 import '../../services/ride_service.dart';
 import '../../services/trip_history_service.dart';
+import '../../services/notification_sound_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../services/auth_service.dart';
 import 'address_search_screen.dart';
+import 'app_tutorial_modal.dart';
+import '../shared/live_chat_screen.dart';
 
 class RiderHomeScreen extends StatefulWidget {
   final VoidCallback onSwitchToDriver;
@@ -112,49 +117,31 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   ];
 
   // Puntos interactivos actuales
-  LatLng _originPoint = const LatLng(10.6678, -63.2585); // Plaza Bolívar
-  LatLng _destinationPoint = const LatLng(10.6710, -63.3058); // Playa Copey (Troncal 9 Oeste)
+  LatLng _originPoint = const LatLng(10.6678, -63.2585); // Plaza Bolívar (o GPS actual)
+  LatLng? _destinationPoint; // Nulo al inicio: sin ruta fija precargada
   bool _isGpsLocating = false;
 
   // Selección de modo al tocar el mapa ('origin' o 'destination')
   String _mapTapMode = 'destination'; 
 
-  // Mototaxis simuladas en calles reales de Carúpano
-  final List<Map<String, dynamic>> _nearbyMotos = [
-    {
-      'name': 'Bera SBR (Azul)',
-      'eta': '2 min',
-      'point': const LatLng(10.6695, -63.2570),
-      'color': BeachColors.oceanPrimary,
-    },
-    {
-      'name': 'Empire Keeway (Roja)',
-      'eta': '4 min',
-      'point': const LatLng(10.6655, -63.2595),
-      'color': const Color(0xFFE11D48),
-    },
-    {
-      'name': 'Bera 150 (Negra)',
-      'eta': '3 min',
-      'point': const LatLng(10.6688, -63.2610),
-      'color': const Color(0xFF0F172A),
-    },
-  ];
+  // Lista de motos en el mapa: solo se muestran conductores reales o ninguno si está limpio
+  final List<Map<String, dynamic>> _nearbyMotos = [];
 
   String selectedVehicle = 'moto'; // 'moto', 'auto', 'auto_ac'
   String selectedPayment = 'pago_movil'; // 'pago_movil', 'efectivo'
 
   final TextEditingController _originController =
-      TextEditingController(text: 'Plaza Bolívar (Centro)');
+      TextEditingController(text: 'Mi Ubicación actual');
   final TextEditingController _destController =
-      TextEditingController(text: 'Playa Copey');
+      TextEditingController(text: '');
   final TextEditingController _noteController =
-      TextEditingController(text: 'Llevo casco');
+      TextEditingController(text: '');
   final TextEditingController _fareController =
-      TextEditingController(text: '2.50');
+      TextEditingController(text: '2.00');
 
   // Estado del flujo: 'idle' -> 'negotiating' -> 'active'
   String rideState = 'idle';
+  bool _isSendingRide = false;
 
   List<Map<String, dynamic>> driverOffers = [];
   Map<String, dynamic>? acceptedDriver;
@@ -168,6 +155,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   // Posición real del conductor y ruta hasta el punto de recogida
   LatLng? _driverCurrentPoint;
   List<LatLng> _driverToPickupRoutePoints = [];
+  DateTime? _lastDriverRouteFetchTime;
 
   // Instancia de RideService para sincronización en tiempo real con el Conductor
   final RideService _rideService = RideService();
@@ -179,8 +167,29 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   void initState() {
     super.initState();
     _rideService.addListener(_onPassengerRideServiceChanged);
-    _fetchRoadRoute();
     _requestGpsLocation();
+    _checkFirstTimeTutorial();
+  }
+
+  Future<void> _checkFirstTimeTutorial() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final seen = prefs.getBool('has_seen_app_tutorial') ?? false;
+      if (!seen && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AppTutorialModal(
+              onCompleted: () async {
+                Navigator.pop(ctx);
+                await prefs.setBool('has_seen_app_tutorial', true);
+              },
+            ),
+          );
+        });
+      }
+    } catch (_) {}
   }
 
   @override
@@ -194,10 +203,44 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     super.dispose();
   }
 
+  String _lastNotifiedStatus = '';
+  final Set<String> _knownOfferIds = {};
+
   void _onPassengerRideServiceChanged() {
     if (!mounted) return;
     final cur = _rideService.currentPassengerRide;
     if (cur != null) {
+      // 1. Alertas de nuevas ofertas y contraofertas de choferes
+      for (final off in cur.offers) {
+        if (!_knownOfferIds.contains(off.id)) {
+          _knownOfferIds.add(off.id);
+          NotificationSoundService().showDriverOfferAlert(
+            driverName: off.driverName,
+            vehicle: '${off.driverVehicle} (${off.driverPlate})',
+            price: off.price,
+            isCounterOffer: off.isCounterOffer,
+          );
+        }
+      }
+
+      // 2. Alerta de llegada del chofer al punto de recogida
+      if (cur.status == 'arrived' && _lastNotifiedStatus != 'arrived') {
+        _lastNotifiedStatus = 'arrived';
+        final dName = cur.acceptedOffer?.driverName ?? 'Tu conductor';
+        final dVeh = cur.acceptedOffer?.driverVehicle ?? 'Moto';
+        NotificationSoundService().showDriverArrivedAlert(
+          driverName: dName,
+          vehicle: dVeh,
+        );
+      }
+
+      // 3. Alerta de finalización
+      if (cur.status == 'completed' && _lastNotifiedStatus != 'completed') {
+        _lastNotifiedStatus = 'completed';
+        final finalP = cur.acceptedOffer?.price ?? cur.offeredPrice;
+        NotificationSoundService().showTripCompletedAlert(finalPrice: finalP);
+      }
+
       setState(() {
         if (cur.status == 'accepted' || cur.status == 'arrived' || cur.status == 'in_progress') {
           rideState = 'active';
@@ -216,15 +259,21 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               'driverLon': cur.acceptedOffer!.driverLon ?? cur.currentDriverLocation?.longitude,
             };
 
-            // Si tenemos la ubicación del conductor, trazar la ruta hacia la recogida
+            // Si tenemos la ubicación del conductor, actualizarla de inmediato en el mapa
             final dLat = cur.currentDriverLocation?.latitude ?? cur.acceptedOffer!.driverLat;
             final dLon = cur.currentDriverLocation?.longitude ?? cur.acceptedOffer!.driverLon;
             if (dLat != null && dLon != null) {
               final newDriverLoc = LatLng(dLat, dLon);
-              if (_driverCurrentPoint == null ||
-                  _driverCurrentPoint!.latitude != newDriverLoc.latitude ||
-                  _driverCurrentPoint!.longitude != newDriverLoc.longitude) {
-                _driverCurrentPoint = newDriverLoc;
+              _driverCurrentPoint = newDriverLoc;
+
+              // Solo recalcular ruta por calles si no hay ruta trazada o han pasado más de 18 segundos
+              final now = DateTime.now();
+              final shouldRefetch = _driverToPickupRoutePoints.isEmpty ||
+                  (_lastDriverRouteFetchTime == null ||
+                      now.difference(_lastDriverRouteFetchTime!).inSeconds >= 18);
+
+              if (shouldRefetch) {
+                _lastDriverRouteFetchTime = now;
                 _fetchDriverToPickupRoute(newDriverLoc, cur.pickupPoint);
               }
             }
@@ -318,6 +367,24 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               ),
             ),
           );
+        } else if (cur.status == 'cancelled') {
+          // Viaje cancelado por alguna de las partes
+          rideState = 'idle';
+          acceptedDriver = null;
+          driverOffers.clear();
+          _driverToPickupRoutePoints.clear();
+          _driverCurrentPoint = null;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('⚠️ El viaje ha sido cancelado.'),
+                  backgroundColor: Colors.redAccent,
+                  duration: Duration(seconds: 4),
+                ),
+              );
+            }
+          });
         } else {
           // En modo negociación o búsqueda, reflejar siempre la lista actualizada de ofertas
           if (cur.status == 'negotiating' || cur.status == 'searching') {
@@ -380,12 +447,22 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   // RUTEO REAL POR CALLES DE CARÚPANO (OSRM API + FALLBACK HAVERSINE)
   // -------------------------------------------------------------
   Future<void> _fetchRoadRoute() async {
+    final dest = _destinationPoint;
+    if (dest == null) {
+      setState(() {
+        _routePoints = [];
+        _roadDistanceKm = 0.0;
+        _roadDurationMin = 0.0;
+        _isLoadingRoute = false;
+      });
+      return;
+    }
+
     setState(() {
       _isLoadingRoute = true;
     });
 
     final origin = _originPoint;
-    final dest = _destinationPoint;
 
     try {
       final url = Uri.parse(
@@ -465,9 +542,10 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   // FÓRMULA DE TARIFA SUGERIDA SEGÚN VEHÍCULO Y KILOMETRAJE REAL
   // -------------------------------------------------------------
   void _updateFareCalculation() {
+    final dest = _destinationPoint;
     final double km = _roadDistanceKm > 0
         ? _roadDistanceKm
-        : _calculateDistanceKm(_originPoint, _destinationPoint);
+        : (dest != null ? _calculateDistanceKm(_originPoint, dest) : 0.0);
 
     double suggestedPrice = 2.0;
 
@@ -484,13 +562,6 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         suggestedPrice = 4.00;
       } else {
         suggestedPrice = 4.00 + ((km - 3.0) * 0.80);
-      }
-    } else if (selectedVehicle == 'auto_ac') {
-      // Base: $5.50 hasta 3 km con aire acondicionado. Después $1.00 por km adicional
-      if (km <= 3.0) {
-        suggestedPrice = 5.50;
-      } else {
-        suggestedPrice = 5.50 + ((km - 3.0) * 1.00);
       }
     }
 
@@ -543,8 +614,10 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       if (permission == LocationPermission.always ||
           permission == LocationPermission.whileInUse) {
         final position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-          timeLimit: const Duration(seconds: 5),
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 5),
+          ),
         );
         if (mounted) {
           setState(() {
@@ -573,7 +646,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           initialOrigin: _originController.text,
           initialDestination: _destController.text,
           originPoint: _originPoint,
-          destinationPoint: _destinationPoint,
+          destinationPoint: _destinationPoint ?? const LatLng(10.6710, -63.3058),
           startWithDestination: isDestination,
           popularPlaces: _carupanoPlaces,
         ),
@@ -632,26 +705,198 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   }
 
   void _startRideSearch() {
+    if (_destinationPoint == null || _destController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ Por favor indica a dónde vas en Carúpano'),
+          backgroundColor: Color(0xFFEF4444),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      _openAddressSearch(isDestination: true);
+      return;
+    }
+
+    if (_originPoint == _destinationPoint) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ El origen y el destino no pueden ser iguales'),
+          backgroundColor: Color(0xFFEF4444),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final double fare = double.tryParse(_fareController.text) ?? 0;
+    if (fare < 1.0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ La tarifa mínima es \$1.00 USD'),
+          backgroundColor: Color(0xFFEF4444),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    _showRideConfirmationDialog(fare);
+  }
+
+  void _showRideConfirmationDialog(double fare) {
+    final vehicleLabel = _buttonVehicleLabel;
+    final paymentLabel = selectedPayment == 'pago_movil' ? 'Pago Móvil' : 'Efectivo';
+    final distText = _roadDistanceKm > 0 ? '${_roadDistanceKm.toStringAsFixed(1)} km' : '~2.0 km';
+    final note = _noteController.text.trim();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Row(
+          children: [
+            Icon(Icons.check_circle_outline, color: BeachColors.oceanPrimary, size: 22),
+            SizedBox(width: 8),
+            Text('Resumen del viaje', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildDialogRow(Icons.place_rounded, 'De:', _originController.text, BeachColors.oceanPrimary),
+            const SizedBox(height: 6),
+            _buildDialogRow(Icons.flag_rounded, 'A:', _destController.text, const Color(0xFFEF4444)),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: BeachColors.backgroundSand,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _buildDialogStat(Icons.two_wheeler, vehicleLabel),
+                  _buildDialogStat(Icons.straighten, distText),
+                  _buildDialogStat(Icons.payments_outlined, '\$$fare'),
+                  _buildDialogStat(Icons.account_balance_wallet_outlined, paymentLabel),
+                ],
+              ),
+            ),
+            if (note.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFFBEB),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFFDE68A)),
+                ),
+                child: Text(
+                  '📝 $note',
+                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF92400E)),
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Editar', style: TextStyle(color: BeachColors.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _sendRideRequest(fare);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: BeachColors.oceanPrimary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Confirmar', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDialogRow(IconData icon, String label, String text, Color color) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 6),
+        Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: BeachColors.textSecondary)),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(fontSize: 12, color: BeachColors.textMain),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDialogStat(IconData icon, String text) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: BeachColors.oceanPrimary),
+        const SizedBox(height: 3),
+        Text(text, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: BeachColors.textMain)),
+      ],
+    );
+  }
+
+  Future<void> _sendRideRequest(double fare) async {
+    if (_isSendingRide) return;
+
     setState(() {
+      _isSendingRide = true;
       rideState = 'negotiating';
       driverOffers = [];
     });
 
-    final double passengerFare = double.tryParse(_fareController.text) ?? 2.50;
+    final passenger = AuthService().currentUser?.fullName ?? 'Pasajero Carúpano';
 
-    // 1. Notificar en vivo al panel de conductores vía RideService & Firestore
-    _rideService.requestRide(
-      passengerName: 'Nelson (Pasajero)',
-      pickupAddress: _originController.text,
-      pickupPoint: _originPoint,
-      dropoffAddress: _destController.text,
-      dropoffPoint: _destinationPoint,
-      offeredPrice: passengerFare,
-      vehicleType: selectedVehicle,
-      paymentMethod: selectedPayment,
-      distanceKm: _roadDistanceKm > 0 ? _roadDistanceKm : 2.5,
-      note: _noteController.text,
-    );
+    try {
+      await _rideService.requestRide(
+        passengerName: passenger,
+        pickupAddress: _originController.text,
+        pickupPoint: _originPoint,
+        dropoffAddress: _destController.text,
+        dropoffPoint: _destinationPoint!,
+        offeredPrice: fare,
+        vehicleType: selectedVehicle,
+        paymentMethod: selectedPayment,
+        distanceKm: _roadDistanceKm > 0 ? _roadDistanceKm : 2.0,
+        note: _noteController.text,
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          rideState = 'idle';
+          _isSendingRide = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error al enviar solicitud: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (mounted) {
+      setState(() => _isSendingRide = false);
+    }
   }
 
   void _acceptDriver(Map<String, dynamic> driver) {
@@ -844,8 +1089,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             // Trazado de Ruta Visual por Calles Reales (OSRM Polyline)
             PolylineLayer(
               polylines: [
-                // 1. Ruta del viaje general (Recogida -> Destino)
-                if (_routePoints.isNotEmpty)
+                // 1. Ruta del viaje general (Recogida -> Destino) - Solo si hay destino elegido
+                if (_destinationPoint != null && _routePoints.isNotEmpty)
                   Polyline(
                     points: _routePoints,
                     strokeWidth: 4.8,
@@ -853,9 +1098,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     borderColor: const Color(0xFF0369A1),
                     borderStrokeWidth: 1.2,
                   )
-                else
+                else if (_destinationPoint != null)
                   Polyline(
-                    points: [_originPoint, _destinationPoint],
+                    points: [_originPoint, _destinationPoint!],
                     strokeWidth: 3.5,
                     color: BeachColors.oceanPrimary.withValues(alpha: 0.6),
                   ),
@@ -920,50 +1165,51 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                   ),
                 ),
 
-                // 2. PIN DE DESTINO (Llegada)
-                Marker(
-                  point: _destinationPoint,
-                  width: 130,
-                  height: 48,
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 7, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: BeachColors.pureWhite,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                              color: const Color(0xFFEF4444), width: 1.5),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.12),
-                              blurRadius: 5,
-                            ),
-                          ],
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.location_on,
-                                color: Color(0xFFEF4444), size: 13),
-                            SizedBox(width: 4),
-                            Text(
-                              'Destino',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                color: BeachColors.textMain,
+                // 2. PIN DE DESTINO (Solo cuando el usuario selecciona un destino)
+                if (_destinationPoint != null)
+                  Marker(
+                    point: _destinationPoint!,
+                    width: 130,
+                    height: 48,
+                    child: Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: BeachColors.pureWhite,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color: const Color(0xFFEF4444), width: 1.5),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.12),
+                                blurRadius: 5,
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.location_on,
+                                  color: Color(0xFFEF4444), size: 13),
+                              SizedBox(width: 4),
+                              Text(
+                                'Destino',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: BeachColors.textMain,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      const Icon(Icons.arrow_drop_down,
-                          color: Color(0xFFEF4444), size: 16),
-                    ],
+                        const Icon(Icons.arrow_drop_down,
+                            color: Color(0xFFEF4444), size: 16),
+                      ],
+                    ),
                   ),
-                ),
 
                 // 3. Marcador en Tiempo Real del Conductor Asignado
                 if (rideState == 'active' && _driverCurrentPoint != null)
@@ -1059,77 +1305,62 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           ],
         ),
 
-        // Chip flotante con la distancia y tiempo estimado calculado
-        Positioned(
-          top: 10,
-          left: 14,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: BeachColors.pureWhite,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: BeachColors.lagoonBorder),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.08),
-                  blurRadius: 6,
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_isLoadingRoute) ...[
-                  const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: BeachColors.oceanPrimary,
-                    ),
+        // Chip flotante con la distancia y tiempo estimado calculado (Solo si hay destino)
+        if (_destinationPoint != null)
+          Positioned(
+            top: 10,
+            left: 12,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: BeachColors.pureWhite,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: BeachColors.lagoonBorder),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 6,
                   ),
-                  const SizedBox(width: 6),
-                  const Text(
-                    'Trazando calles...',
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w600,
-                      color: BeachColors.textSecondary,
-                    ),
-                  ),
-                ] else ...[
-                  const Icon(Icons.alt_route,
-                      color: BeachColors.oceanPrimary, size: 14),
-                  const SizedBox(width: 5),
-                  Text(
-                    '${_roadDistanceKm.toStringAsFixed(1)} km  •  ~$_calculatedDurationMin min',
-                    style: const TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w700,
-                      color: BeachColors.textMain,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                    decoration: BoxDecoration(
-                      color: BeachColors.oceanLight,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Text(
-                      'Calles',
-                      style: TextStyle(
-                        fontSize: 8.5,
-                        fontWeight: FontWeight.w700,
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_isLoadingRoute) ...[
+                    const SizedBox(
+                      width: 10,
+                      height: 10,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
                         color: BeachColors.oceanPrimary,
                       ),
                     ),
-                  ),
+                    const SizedBox(width: 5),
+                    const Text(
+                      'Trazando...',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: BeachColors.textSecondary,
+                      ),
+                    ),
+                  ] else ...[
+                    const Icon(Icons.alt_route,
+                        color: BeachColors.oceanPrimary, size: 13),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_roadDistanceKm.toStringAsFixed(1)} km • ~$_calculatedDurationMin min',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: BeachColors.textMain,
+                      ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
-        ),
 
         // Selector flotante para cambiar el punto que quieres mover en el mapa
         Positioned(
@@ -1189,8 +1420,10 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   // FORMULARIO PRINCIPAL DE PEDIDO
   // -------------------------------------------------------------
   Widget _buildPassengerForm() {
-    final double tripDistance =
-        _calculateDistanceKm(_originPoint, _destinationPoint);
+    final dest = _destinationPoint;
+    final double tripDistance = _roadDistanceKm > 0
+        ? _roadDistanceKm
+        : (dest != null ? _calculateDistanceKm(_originPoint, dest) : 0.0);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -1210,33 +1443,24 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Selector Vehículo: Moto / Auto / Auto A/C
+            // Selector de tipo de vehículo (Solo Moto y Auto)
             Row(
               children: [
                 Expanded(
                   child: _buildVehicleTab(
                     id: 'moto',
                     title: 'Moto',
-                    time: '2 min',
+                    time: 'Rápido',
                     icon: Icons.two_wheeler_outlined,
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 10),
                 Expanded(
                   child: _buildVehicleTab(
                     id: 'auto',
-                    title: 'Auto',
-                    time: '4 min',
+                    title: 'Carro',
+                    time: 'Hasta 4 pers.',
                     icon: Icons.directions_car_outlined,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _buildVehicleTab(
-                    id: 'auto_ac',
-                    title: 'Auto A/C',
-                    time: '5 min',
-                    icon: Icons.ac_unit,
                   ),
                 ),
               ],
@@ -1249,7 +1473,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: _carupanoPlaces.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 6),
+                separatorBuilder: (_, _) => const SizedBox(width: 6),
                 itemBuilder: (ctx, i) {
                   final place = _carupanoPlaces[i];
                   return InkWell(
@@ -1309,6 +1533,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               iconColor: BeachColors.textSecondary,
               controller: _noteController,
               hint: 'Nota: "Llevo casco", "Billete de \$20", etc.',
+              maxLength: 100,
             ),
             const SizedBox(height: 10),
 
@@ -1408,19 +1633,29 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               width: double.infinity,
               height: 44,
               child: ElevatedButton(
-                onPressed: _startRideSearch,
+                onPressed: _isSendingRide ? null : _startRideSearch,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: BeachColors.oceanPrimary,
                   foregroundColor: BeachColors.pureWhite,
+                  disabledBackgroundColor: BeachColors.oceanPrimary.withValues(alpha: 0.5),
                   elevation: 0,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10)),
                 ),
-                child: Text(
-                  'SOLICITAR $_buttonVehicleLabel POR \$${_fareController.text}',
-                  style:
-                      const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-                ),
+                child: _isSendingRide
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Text(
+                        'SOLICITAR $_buttonVehicleLabel POR \$${_fareController.text}',
+                        style:
+                            const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                      ),
               ),
             ),
           ],
@@ -1516,7 +1751,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               child: ListView.separated(
                 shrinkWrap: true,
                 itemCount: driverOffers.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
                 itemBuilder: (ctx, i) {
                   final offer = driverOffers[i];
                   return _buildDriverOfferCard(offer);
@@ -1633,6 +1868,23 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                   child: const Text('Aceptar',
                       style: TextStyle(
                           fontSize: 11, fontWeight: FontWeight.w600)),
+                ),
+              ),
+              const SizedBox(height: 4),
+              SizedBox(
+                height: 26,
+                child: OutlinedButton(
+                  onPressed: _resetRide,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFEF4444),
+                    side: const BorderSide(color: Color(0xFFEF4444), width: 1),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(6)),
+                  ),
+                  child: const Text('Cancelar',
+                      style: TextStyle(
+                          fontSize: 10, fontWeight: FontWeight.w600)),
                 ),
               ),
             ],
@@ -1797,18 +2049,22 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Abriendo chat con el conductor...'),
-                        backgroundColor: BeachColors.oceanPrimary,
-                      ),
+                    final rideId = _rideService.currentPassengerRide?.id;
+                    final user = AuthService().currentUser;
+                    if (rideId == null || user == null) return;
+                    LiveChatSheet.show(
+                      context,
+                      rideId: rideId,
+                      currentUserId: user.id,
+                      currentUserName: user.fullName,
+                      isDriver: false,
                     );
                   },
                   icon: const Icon(Icons.chat_bubble_outline, size: 16),
                   label: const Text('Chat', style: TextStyle(fontSize: 12)),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: BeachColors.textMain,
-                    side: const BorderSide(color: BeachColors.lagoonBorder),
+                    foregroundColor: BeachColors.oceanPrimary,
+                    side: const BorderSide(color: BeachColors.oceanPrimary),
                   ),
                 ),
               ),
@@ -1888,6 +2144,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     required String hint,
     VoidCallback? onTap,
     bool readOnly = false,
+    int? maxLength,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -1908,6 +2165,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                 controller: controller,
                 readOnly: readOnly,
                 onTap: onTap,
+                maxLength: maxLength,
+                buildCounter: (context, {required currentLength, required isFocused, required maxLength}) => null,
                 style: const TextStyle(fontSize: 12, color: BeachColors.textMain),
                 decoration: InputDecoration(
                   border: InputBorder.none,
@@ -1975,22 +2234,28 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                       color: BeachColors.oceanPrimary, size: 28),
                 ),
                 const SizedBox(width: 14),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text(
-                      'Nelson (Pasajero)',
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: BeachColors.textMain),
-                    ),
-                    Text(
-                      'Carúpano, Sucre',
-                      style: TextStyle(
-                          fontSize: 11.5, color: BeachColors.textSecondary),
-                    ),
-                  ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        AuthService().currentUser?.fullName ?? 'Pasajero Carúpano',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: BeachColors.textMain),
+                      ),
+                      Text(
+                        AuthService().currentUser?.phone.isNotEmpty == true
+                            ? AuthService().currentUser!.phone
+                            : 'Carúpano, Sucre',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 11.5, color: BeachColors.textSecondary),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -2031,11 +2296,37 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             onTap: () => Navigator.pop(context),
           ),
           ListTile(
+            leading: const Icon(Icons.school_outlined,
+                color: BeachColors.oceanPrimary, size: 21),
+            title: const Text('¿Cómo funciona la App? (Tutorial)',
+                style: TextStyle(fontSize: 13, color: BeachColors.oceanPrimary, fontWeight: FontWeight.w600)),
+            onTap: () {
+              Navigator.pop(context);
+              showDialog(
+                context: context,
+                builder: (ctx) => AppTutorialModal(
+                  onCompleted: () => Navigator.pop(ctx),
+                ),
+              );
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.info_outline,
                 color: BeachColors.textSecondary, size: 21),
             title: const Text('Acerca de Carúpano Riders',
                 style: TextStyle(fontSize: 13, color: BeachColors.textMain)),
             onTap: () => Navigator.pop(context),
+          ),
+          const Divider(height: 1, color: BeachColors.lagoonBorder),
+          ListTile(
+            leading: const Icon(Icons.logout_rounded,
+                color: Color(0xFFEF4444), size: 21),
+            title: const Text('Cerrar Sesión',
+                style: TextStyle(fontSize: 13, color: Color(0xFFEF4444), fontWeight: FontWeight.w600)),
+            onTap: () async {
+              Navigator.pop(context);
+              await AuthService().logout();
+            },
           ),
         ],
       ),

@@ -11,7 +11,10 @@ import '../../theme/beach_colors.dart';
 import '../../services/ride_service.dart';
 import '../../services/driver_profile_service.dart';
 import '../../services/trip_history_service.dart';
+import '../../services/notification_sound_service.dart';
+import '../../services/auth_service.dart';
 import 'driver_register_screen.dart';
+import '../shared/live_chat_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   final VoidCallback onSwitchToPassenger;
@@ -34,6 +37,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   double driverWallet = 0.00; // Saldo en dólares
 
   LatLng _driverLocation = const LatLng(10.6690, -63.2575);
+  StreamSubscription<Position>? _gpsStreamSub;
 
   RideRequest? _inspectedRide;
   List<LatLng> _inspectedRoutePoints = [];
@@ -75,16 +79,46 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       }
       if (perm == LocationPermission.always || perm == LocationPermission.whileInUse) {
         final pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-          timeLimit: const Duration(seconds: 4),
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 4),
+          ),
         );
         if (mounted) {
           setState(() {
             _driverLocation = LatLng(pos.latitude, pos.longitude);
           });
         }
+        _startGpsStream();
       }
     } catch (_) {}
+  }
+
+  void _startGpsStream() {
+    _gpsStreamSub?.cancel();
+    _gpsStreamSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10,
+      ),
+    ).listen((pos) {
+      if (!mounted) return;
+      final newLoc = LatLng(pos.latitude, pos.longitude);
+      setState(() {
+        _driverLocation = newLoc;
+      });
+      if (_activeAcceptedRide != null) {
+        _rideService.updateDriverLocation(
+          rideId: _activeAcceptedRide!.id,
+          location: newLoc,
+        );
+      }
+    });
+  }
+
+  void _stopGpsStream() {
+    _gpsStreamSub?.cancel();
+    _gpsStreamSub = null;
   }
 
   Future<void> _loadProfile() async {
@@ -100,13 +134,35 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   @override
   void dispose() {
+    _stopGpsStream();
     _tripHistory.removeListener(_onTripHistoryChanged);
     _rideService.removeListener(_onRideServiceChanged);
     super.dispose();
   }
 
+  final Set<String> _knownRideIds = {};
+  // rides donde el chofer envió contraoferta y espera respuesta del pasajero
+  final Set<String> _pendingCounterOfferRideIds = {};
+
+
   void _onRideServiceChanged() {
     if (!mounted) return;
+
+    // 🚨 Alerta de nueva carrera en el radar cuando el chofer está en línea
+    if (isOnline) {
+      for (final ride in _rideService.activeRides) {
+        if (!_knownRideIds.contains(ride.id) && (ride.status == 'searching' || ride.status == 'negotiating')) {
+          _knownRideIds.add(ride.id);
+          NotificationSoundService().showNewRideAlert(
+            rideId: ride.id,
+            passengerName: ride.passengerName,
+            destination: ride.dropoffAddress,
+            offeredPrice: ride.offeredPrice,
+          );
+        }
+      }
+    }
+
     setState(() {
       final myId = _profile?.id ?? 'driver_me';
 
@@ -116,6 +172,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           if (ride.status == 'accepted' && ride.acceptedOffer?.id == myId) {
             _activeAcceptedRide = ride;
             _activeRideStep = 'heading_to_pickup';
+            // Limpiar el estado de espera de contraoferta
+            _pendingCounterOfferRideIds.remove(ride.id);
             // Mostrar snackbar en el próximo frame
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) {
@@ -143,7 +201,38 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             .where((r) => r.id == _activeAcceptedRide!.id)
             .firstOrNull;
         if (updated != null) {
-          _activeAcceptedRide = updated;
+          if (updated.status == 'cancelled') {
+            _activeAcceptedRide = null;
+            _activeRideStep = 'heading_to_pickup';
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('⚠️ El pasajero ha cancelado el viaje.'),
+                    backgroundColor: Colors.redAccent,
+                    duration: Duration(seconds: 4),
+                  ),
+                );
+              }
+            });
+          } else {
+            _activeAcceptedRide = updated;
+          }
+        } else {
+          // El viaje fue completado o cancelado remotamente
+          _activeAcceptedRide = null;
+          _activeRideStep = 'heading_to_pickup';
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('⚠️ El viaje ya no está activo o fue cancelado.'),
+                  backgroundColor: Colors.orangeAccent,
+                  duration: Duration(seconds: 3),
+                ),
+              );
+            }
+          });
         }
       }
     });
@@ -253,10 +342,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
     _rideService.submitDriverOffer(rideId: ride.id, offer: offer);
 
+    // Marcar que enviamos una contraoferta y esperamos respuesta
+    setState(() {
+      _pendingCounterOfferRideIds.add(ride.id);
+    });
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Contraoferta enviada al pasajero por \$${counterPrice.toStringAsFixed(2)}.'),
+        content: Text('⏳ Contraoferta enviada por \$${counterPrice.toStringAsFixed(2)} — esperando respuesta del pasajero.'),
         backgroundColor: BeachColors.oceanPrimary,
+        duration: const Duration(seconds: 4),
       ),
     );
   }
@@ -306,6 +401,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         _activeRideStep = 'completed';
       });
       _rideService.updateRideStatus(rideId: ride.id, newStatus: 'completed');
+      _stopGpsStream();
 
       showDialog(
         context: context,
@@ -340,6 +436,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 setState(() {
                   _activeAcceptedRide = null;
                 });
+                _stopGpsStream();
               },
               child: const Text('Aceptar', style: TextStyle(fontWeight: FontWeight.bold, color: BeachColors.oceanPrimary)),
             ),
@@ -426,7 +523,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: InkWell(
-              onTap: widget.onSwitchToPassenger,
+              onTap: () {
+                _stopGpsStream();
+                widget.onSwitchToPassenger();
+              },
               borderRadius: BorderRadius.circular(20),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -566,7 +666,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                   border: Border.all(color: Colors.white, width: 2.5),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withOpacity(0.2),
+                                      color: Colors.black.withValues(alpha: 0.2),
                                       blurRadius: 6,
                                     ),
                                   ],
@@ -646,7 +746,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                           color: BeachColors.pureWhite,
                           borderRadius: BorderRadius.circular(12),
                           boxShadow: [
-                            BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 4),
+                            BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 4),
                           ],
                         ),
                         child: Text(
@@ -793,10 +893,40 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             ),
           ),
           const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    final rideId = _activeAcceptedRide?.id;
+                    final dId = _profile?.id ?? 'driver_me';
+                    final dName = _profile?.fullName ?? 'Conductor';
+                    if (rideId == null) return;
+                    LiveChatSheet.show(
+                      context,
+                      rideId: rideId,
+                      currentUserId: dId,
+                      currentUserName: dName,
+                      isDriver: true,
+                    );
+                  },
+                  icon: const Icon(Icons.chat_bubble_outline_rounded, size: 16),
+                  label: const Text('Chat con pasajero', style: TextStyle(fontSize: 11.5)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: BeachColors.oceanPrimary,
+                    side: const BorderSide(color: BeachColors.oceanPrimary),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                ),
+              ),
+            ],
+          ),
           Center(
             child: TextButton(
               onPressed: () {
                 setState(() => _activeAcceptedRide = null);
+                _stopGpsStream();
               },
               child: const Text('Volver al radar de viajes', style: TextStyle(fontSize: 11, color: BeachColors.textSecondary)),
             ),
@@ -856,7 +986,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.03),
+                  color: Colors.black.withValues(alpha: 0.03),
                   blurRadius: 6,
                   offset: const Offset(0, 2),
                 ),
@@ -938,70 +1068,113 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                     ],
                   ],
                 ),
-                const SizedBox(height: 10),
-
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 4,
-                      child: SizedBox(
-                        height: 34,
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: BeachColors.emeraldSuccess,
-                            padding: EdgeInsets.zero,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                // ── Botones de acción ─────────────────────────────────────
+                if (_pendingCounterOfferRideIds.contains(ride.id))
+                  // Estado: Esperando respuesta del pasajero a la contraoferta
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF7ED),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: BeachColors.softAmber, width: 1.2),
+                    ),
+                    child: Row(
+                      children: [
+                        const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(BeachColors.softAmber),
                           ),
-                          onPressed: () => _acceptRideDirectly(ride),
+                        ),
+                        const SizedBox(width: 10),
+                        const Expanded(
                           child: Text(
-                            'Aceptar \$${ride.offeredPrice.toStringAsFixed(2)}',
-                            style: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.bold),
+                            '⏳ Contraoferta enviada — esperando respuesta del pasajero...',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              color: Color(0xFF92400E),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => setState(() => _pendingCounterOfferRideIds.remove(ride.id)),
+                          style: TextButton.styleFrom(
+                            foregroundColor: BeachColors.textSecondary,
+                            padding: EdgeInsets.zero,
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Text('Retirar', style: TextStyle(fontSize: 10)),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 4,
+                        child: SizedBox(
+                          height: 34,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: BeachColors.emeraldSuccess,
+                              padding: EdgeInsets.zero,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                            onPressed: () => _acceptRideDirectly(ride),
+                            child: Text(
+                              'Aceptar \$${ride.offeredPrice.toStringAsFixed(2)}',
+                              style: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.bold),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      flex: 3,
-                      child: SizedBox(
-                        height: 34,
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: BeachColors.oceanPrimary,
-                            side: const BorderSide(color: BeachColors.oceanPrimary),
-                            padding: EdgeInsets.zero,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          onPressed: () => _counterOffer(ride, ride.offeredPrice + 0.50),
-                          child: Text(
-                            '+\$0.50 (\$${(ride.offeredPrice + 0.50).toStringAsFixed(2)})',
-                            style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      flex: 3,
-                      child: SizedBox(
-                        height: 34,
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: BeachColors.oceanPrimary,
-                            side: const BorderSide(color: BeachColors.oceanPrimary),
-                            padding: EdgeInsets.zero,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          onPressed: () => _counterOffer(ride, ride.offeredPrice + 1.00),
-                          child: Text(
-                            '+\$1.00 (\$${(ride.offeredPrice + 1.00).toStringAsFixed(2)})',
-                            style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        flex: 3,
+                        child: SizedBox(
+                          height: 34,
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: BeachColors.oceanPrimary,
+                              side: const BorderSide(color: BeachColors.oceanPrimary),
+                              padding: EdgeInsets.zero,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                            onPressed: () => _counterOffer(ride, ride.offeredPrice + 0.50),
+                            child: Text(
+                              '+\$0.50 (\$${(ride.offeredPrice + 0.50).toStringAsFixed(2)})',
+                              style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        flex: 3,
+                        child: SizedBox(
+                          height: 34,
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: BeachColors.oceanPrimary,
+                              side: const BorderSide(color: BeachColors.oceanPrimary),
+                              padding: EdgeInsets.zero,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                            onPressed: () => _counterOffer(ride, ride.offeredPrice + 1.00),
+                            child: Text(
+                              '+\$1.00 (\$${(ride.offeredPrice + 1.00).toStringAsFixed(2)})',
+                              style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
               ],
             ),
           ),
@@ -1037,7 +1210,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               children: [
                 CircleAvatar(
                   radius: 30,
-                  backgroundColor: Colors.white.withOpacity(0.25),
+                  backgroundColor: Colors.white.withValues(alpha: 0.25),
                   child: Text(
                     _profile != null && _profile!.fullName.isNotEmpty
                         ? _profile!.fullName[0].toUpperCase()
@@ -1074,97 +1247,113 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           ),
 
           // ─── Acciones rápidas ──────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.zero,
               children: [
-                Expanded(
-                  child: _drawerActionCard(
-                    icon: Icons.account_balance_wallet,
-                    label: 'Billetera',
-                    value: '\$${driverWallet.toStringAsFixed(2)}',
-                    color: BeachColors.emeraldSuccess,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _drawerActionCard(
+                          icon: Icons.account_balance_wallet,
+                          label: 'Billetera',
+                          value: '\$${driverWallet.toStringAsFixed(2)}',
+                          color: BeachColors.emeraldSuccess,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _drawerActionCard(
+                          icon: Icons.star_rounded,
+                          label: 'Calificación',
+                          value: avgRating > 0 ? '${avgRating.toStringAsFixed(1)} ★' : '—',
+                          color: const Color(0xFFF59E0B),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _drawerActionCard(
-                    icon: Icons.star_rounded,
-                    label: 'Calificación',
-                    value: avgRating > 0 ? '${avgRating.toStringAsFixed(1)} ★' : '—',
-                    color: const Color(0xFFF59E0B),
-                  ),
+
+                const Divider(height: 1, color: BeachColors.lagoonBorder),
+
+                // ─── Menú items ────────────────────────────────────────────────────
+                ListTile(
+                  leading: const Icon(Icons.badge_outlined, color: BeachColors.oceanPrimary, size: 20),
+                  title: const Text('Editar Perfil', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (ctx) => DriverRegisterScreen(
+                          onProfileSaved: () {
+                            Navigator.pop(ctx);
+                            _loadProfile();
+                          },
+                        ),
+                      ),
+                    );
+                  },
                 ),
+                ListTile(
+                  leading: const Icon(Icons.history, color: BeachColors.oceanPrimary, size: 20),
+                  title: const Text('Historial de Viajes', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  trailing: trips.isNotEmpty
+                      ? Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: BeachColors.oceanLight,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '$totalTrips',
+                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: BeachColors.oceanPrimary),
+                          ),
+                        )
+                      : null,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showTripHistorySheet();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.support_agent, color: BeachColors.oceanPrimary, size: 20),
+                  title: const Text('Soporte / Ayuda', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Próximamente: Chat de soporte')),
+                    );
+                  },
+                ),
+
+                const Divider(height: 1, color: BeachColors.lagoonBorder),
+
+                // ─── Cambiar a modo pasajero ───────────────────────────────────────
+                ListTile(
+                  leading: const Icon(Icons.person_outline, color: BeachColors.textMuted, size: 20),
+                  title: const Text('Cambiar a Pasajero', style: TextStyle(fontSize: 13, color: BeachColors.textSecondary)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _stopGpsStream();
+                    widget.onSwitchToPassenger();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.logout_rounded, color: Color(0xFFEF4444), size: 20),
+                  title: const Text('Cerrar Sesión', style: TextStyle(fontSize: 13, color: Color(0xFFEF4444), fontWeight: FontWeight.w600)),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    _stopGpsStream();
+                    await AuthService().logout();
+                  },
+                ),
+                const SizedBox(height: 8),
               ],
             ),
           ),
-
-          const Divider(height: 1, color: BeachColors.lagoonBorder),
-
-          // ─── Menú items ────────────────────────────────────────────────────
-          ListTile(
-            leading: const Icon(Icons.badge_outlined, color: BeachColors.oceanPrimary, size: 20),
-            title: const Text('Editar Perfil', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => DriverRegisterScreen(
-                    onProfileSaved: () {
-                      Navigator.pop(ctx);
-                      _loadProfile();
-                    },
-                  ),
-                ),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.history, color: BeachColors.oceanPrimary, size: 20),
-            title: const Text('Historial de Viajes', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            trailing: trips.isNotEmpty
-                ? Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: BeachColors.oceanLight,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      '$totalTrips',
-                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: BeachColors.oceanPrimary),
-                    ),
-                  )
-                : null,
-            onTap: () {
-              Navigator.pop(context);
-              _showTripHistorySheet();
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.support_agent, color: BeachColors.oceanPrimary, size: 20),
-            title: const Text('Soporte / Ayuda', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            onTap: () {
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Próximamente: Chat de soporte')),
-              );
-            },
-          ),
-
-          const Spacer(),
-          const Divider(height: 1, color: BeachColors.lagoonBorder),
-
-          // ─── Cambiar a modo pasajero ───────────────────────────────────────
-          ListTile(
-            leading: const Icon(Icons.person_outline, color: BeachColors.textMuted, size: 20),
-            title: const Text('Cambiar a Pasajero', style: TextStyle(fontSize: 13, color: BeachColors.textSecondary)),
-            onTap: () {
-              Navigator.pop(context);
-              widget.onSwitchToPassenger();
-            },
-          ),
-          const SizedBox(height: 8),
         ],
       ),
     );
@@ -1174,7 +1363,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.2),
+        color: Colors.white.withValues(alpha: 0.2),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -1197,9 +1386,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.2)),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [
@@ -1209,7 +1398,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: TextStyle(fontSize: 9.5, color: color.withOpacity(0.8))),
+                Text(label, style: TextStyle(fontSize: 9.5, color: color.withValues(alpha: 0.8))),
                 Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color)),
               ],
             ),
@@ -1291,7 +1480,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                         controller: scrollController,
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                         itemCount: trips.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 6),
+                        separatorBuilder: (_, _) => const SizedBox(height: 6),
                         itemBuilder: (_, i) {
                           final t = trips[i];
                           return Container(
