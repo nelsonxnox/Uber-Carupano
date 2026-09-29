@@ -491,6 +491,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         onProfileSaved: () {
           _loadProfile();
         },
+        onBackToPassenger: () {
+          widget.onSwitchToPassenger();
+        },
       );
     }
 

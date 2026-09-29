@@ -5,7 +5,12 @@ import '../../services/auth_service.dart';
 
 class DriverRegisterScreen extends StatefulWidget {
   final VoidCallback onProfileSaved;
-  const DriverRegisterScreen({super.key, required this.onProfileSaved});
+  final VoidCallback? onBackToPassenger;
+  const DriverRegisterScreen({
+    super.key,
+    required this.onProfileSaved,
+    this.onBackToPassenger,
+  });
 
   @override
   State<DriverRegisterScreen> createState() => _DriverRegisterScreenState();
@@ -83,6 +88,17 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
       appBar: AppBar(
         backgroundColor: BeachColors.pureWhite,
         elevation: 1,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: BeachColors.textMain),
+          onPressed: () {
+            if (widget.onBackToPassenger != null) {
+              widget.onBackToPassenger!();
+            } else {
+              Navigator.maybePop(context);
+            }
+          },
+          tooltip: 'Volver a modo pasajero',
+        ),
         title: const Text(
           'Registro de Conductor',
           style: TextStyle(
@@ -92,6 +108,29 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
           ),
         ),
         centerTitle: true,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: TextButton.icon(
+              onPressed: () {
+                if (widget.onBackToPassenger != null) {
+                  widget.onBackToPassenger!();
+                } else {
+                  Navigator.maybePop(context);
+                }
+              },
+              icon: const Icon(Icons.person_outline, size: 16, color: BeachColors.oceanPrimary),
+              label: const Text(
+                'Pasajero',
+                style: TextStyle(
+                  color: BeachColors.oceanPrimary,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -388,6 +427,27 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
                               fontWeight: FontWeight.bold,
                             ),
                           ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Center(
+                  child: TextButton.icon(
+                    onPressed: () {
+                      if (widget.onBackToPassenger != null) {
+                        widget.onBackToPassenger!();
+                      } else {
+                        Navigator.maybePop(context);
+                      }
+                    },
+                    icon: const Icon(Icons.arrow_back, size: 16, color: BeachColors.textSecondary),
+                    label: const Text(
+                      'Volver al modo pasajero',
+                      style: TextStyle(
+                        color: BeachColors.textSecondary,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
                   ),
                 ),
               ],
