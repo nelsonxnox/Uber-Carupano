@@ -74,7 +74,6 @@ class TripHistoryService extends ChangeNotifier {
   String _prefKey(String driverId) => 'driver_trip_history_$driverId';
 
   Future<void> load([String? driverId]) async {
-    _currentDriverId = driverId;
     _trips.clear();
     if (driverId == null || driverId.isEmpty) {
       notifyListeners();
@@ -115,7 +114,6 @@ class TripHistoryService extends ChangeNotifier {
     required String driverId,
     required CompletedTrip trip,
   }) async {
-    _currentDriverId = driverId;
     _trips.insert(0, trip);
     notifyListeners();
     await _persist(driverId);

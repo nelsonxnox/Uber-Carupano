@@ -146,12 +146,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   final Set<String> _knownRideIds = {};
-  // rides donde el chofer envió contraoferta y espera respuesta del pasajero
-  final Set<String> _pendingCounterOfferRideIds = {};
-
+  // IDs de viajes donde este chofer envió oferta o contraoferta y espera decisión del pasajero
+  final Set<String> _pendingOfferRideIds = {};
 
   void _onRideServiceChanged() {
     if (!mounted) return;
+
+    final myId = _profile?.id ?? 'driver_me';
 
     // 🚨 Alerta de nueva carrera en el radar cuando el chofer está en línea
     if (isOnline) {
@@ -169,35 +170,58 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
 
     setState(() {
-      final myId = _profile?.id ?? 'driver_me';
-
       if (_activeAcceptedRide == null) {
-        // Detectar si el pasajero aceptó NUESTRA contraoferta u oferta
-        for (final ride in _rideService.activeRides) {
-          if (ride.status == 'accepted' && ride.acceptedOffer?.id == myId) {
-            _activeAcceptedRide = ride;
-            _activeRideStep = 'heading_to_pickup';
-            // Limpiar el estado de espera de contraoferta
-            _pendingCounterOfferRideIds.remove(ride.id);
-            // Mostrar snackbar en el próximo frame
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) {
-                final price = ride.acceptedOffer?.price ?? ride.offeredPrice;
-                final isCounter = ride.acceptedOffer?.isCounterOffer ?? false;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      isCounter
-                          ? '✅ ¡Pasajero aceptó tu contraoferta de \$${price.toStringAsFixed(2)}!'
-                          : '✅ ¡Viaje aceptado por \$${price.toStringAsFixed(2)}!',
+        // Verificar las carreras donde enviamos oferta o contraoferta
+        final pendingIds = _pendingOfferRideIds.toList();
+        for (final rideId in pendingIds) {
+          final ride = _rideService.activeRides.where((r) => r.id == rideId).firstOrNull;
+
+          if (ride != null) {
+            // CASO 1: ¡El pasajero nos aceptó a NOSOTROS!
+            if (ride.status == 'accepted' && ride.acceptedOffer?.id == myId) {
+              _activeAcceptedRide = ride;
+              _activeRideStep = 'heading_to_pickup';
+              _pendingOfferRideIds.remove(rideId);
+
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  final price = ride.acceptedOffer?.price ?? ride.offeredPrice;
+                  final isCounter = ride.acceptedOffer?.isCounterOffer ?? false;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        isCounter
+                            ? '✅ ¡El pasajero aceptó tu contraoferta de \$${price.toStringAsFixed(2)}!'
+                            : '✅ ¡El pasajero aceptó tu oferta de \$${price.toStringAsFixed(2)}!',
+                      ),
+                      backgroundColor: BeachColors.emeraldSuccess,
+                      duration: const Duration(seconds: 4),
                     ),
-                    backgroundColor: BeachColors.emeraldSuccess,
-                    duration: const Duration(seconds: 3),
-                  ),
-                );
+                  );
+                }
+              });
+              break;
+            }
+            // CASO 2: El pasajero seleccionó a OTRO chofer
+            else if (ride.status == 'accepted' || ride.status == 'in_progress') {
+              if (ride.acceptedOffer?.id != myId) {
+                _pendingOfferRideIds.remove(rideId);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('ℹ️ El pasajero seleccionó a otro conductor para este viaje.'),
+                        backgroundColor: Color(0xFF475569),
+                        duration: Duration(seconds: 4),
+                      ),
+                    );
+                  }
+                });
               }
-            });
-            break;
+            }
+          } else {
+            // El viaje desapareció o fue cancelado
+            _pendingOfferRideIds.remove(rideId);
           }
         }
       } else {
@@ -305,18 +329,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       driverLon: _driverLocation.longitude,
     );
 
+    // Enviar oferta al pasajero para que éste la acepte o rechace
     _rideService.submitDriverOffer(rideId: ride.id, offer: offer);
-    _rideService.acceptOffer(rideId: ride.id, offer: offer, driverLocation: _driverLocation);
 
     setState(() {
-      _activeAcceptedRide = ride;
-      _activeRideStep = 'heading_to_pickup';
+      _pendingOfferRideIds.add(ride.id);
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('¡Viaje aceptado por \$${ride.offeredPrice.toStringAsFixed(2)}! Dirígete a ${ride.pickupAddress}.'),
-        backgroundColor: BeachColors.emeraldSuccess,
+        content: Text('⏳ Oferta enviada por \$${ride.offeredPrice.toStringAsFixed(2)} — esperando que el pasajero elija.'),
+        backgroundColor: BeachColors.oceanPrimary,
+        duration: const Duration(seconds: 4),
       ),
     );
   }
@@ -345,17 +369,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       driverLon: _driverLocation.longitude,
     );
 
+    // Enviar contraoferta al pasajero
     _rideService.submitDriverOffer(rideId: ride.id, offer: offer);
 
-    // Marcar que enviamos una contraoferta y esperamos respuesta
     setState(() {
-      _pendingCounterOfferRideIds.add(ride.id);
+      _pendingOfferRideIds.add(ride.id);
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('⏳ Contraoferta enviada por \$${counterPrice.toStringAsFixed(2)} — esperando respuesta del pasajero.'),
-        backgroundColor: BeachColors.oceanPrimary,
+        backgroundColor: BeachColors.softAmber,
         duration: const Duration(seconds: 4),
       ),
     );
@@ -757,7 +781,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                         child: Text(
                           _activeAcceptedRide != null
                               ? 'Viaje en Curso'
-                              : 'Radar Carúpano (${activeRides.length} viajes)',
+                              : 'Radar Carúpano (${activeRides.where((r) => r.status == "searching" || r.status == "negotiating").length} viajes)',
                           style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: BeachColors.textMain),
                         ),
                       ),
@@ -769,7 +793,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               Expanded(
                 child: _activeAcceptedRide != null
                     ? _buildActiveTripPanel()
-                    : _buildIncomingRequestsList(activeRides),
+                    : _buildIncomingRequestsList(
+                        activeRides.where((r) => r.status == "searching" || r.status == "negotiating").toList(),
+                      ),
               ),
             ],
           );
@@ -1074,14 +1100,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   ],
                 ),
                 // ── Botones de acción ─────────────────────────────────────
-                if (_pendingCounterOfferRideIds.contains(ride.id))
-                  // Estado: Esperando respuesta del pasajero a la contraoferta
+                if (_pendingOfferRideIds.contains(ride.id))
+                  // Estado: Esperando respuesta del pasajero a la oferta o contraoferta
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFFF7ED),
+                      color: const Color(0xFFEFF6FF),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: BeachColors.softAmber, width: 1.2),
+                      border: Border.all(color: BeachColors.oceanPrimary, width: 1.2),
                     ),
                     child: Row(
                       children: [
@@ -1090,22 +1116,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                           height: 14,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(BeachColors.softAmber),
+                            valueColor: AlwaysStoppedAnimation<Color>(BeachColors.oceanPrimary),
                           ),
                         ),
                         const SizedBox(width: 10),
                         const Expanded(
                           child: Text(
-                            '⏳ Contraoferta enviada — esperando respuesta del pasajero...',
+                            '⏳ Oferta enviada — esperando que el pasajero elija...',
                             style: TextStyle(
                               fontSize: 10.5,
-                              color: Color(0xFF92400E),
+                              color: BeachColors.oceanPrimary,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
                         TextButton(
-                          onPressed: () => setState(() => _pendingCounterOfferRideIds.remove(ride.id)),
+                          onPressed: () => setState(() => _pendingOfferRideIds.remove(ride.id)),
                           style: TextButton.styleFrom(
                             foregroundColor: BeachColors.textSecondary,
                             padding: EdgeInsets.zero,
