@@ -6,9 +6,11 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import '../../theme/beach_colors.dart';
 import '../../services/ride_service.dart';
 import '../../services/trip_history_service.dart';
+import '../../services/passenger_trip_history_service.dart';
 import '../../services/notification_sound_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/auth_service.dart';
@@ -169,6 +171,11 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     _rideService.addListener(_onPassengerRideServiceChanged);
     _requestGpsLocation();
     _checkFirstTimeTutorial();
+    // Cargar historial de viajes del pasajero al arrancar
+    final uid = AuthService().currentUser?.id ?? '';
+    if (uid.isNotEmpty) {
+      PassengerTripHistoryService().load(uid);
+    }
   }
 
   Future<void> _checkFirstTimeTutorial() async {
@@ -282,12 +289,36 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           // Viaje finalizado con éxito
           final driverN = cur.acceptedOffer?.driverName ?? 'El conductor';
           final driverId = cur.acceptedOffer?.id ?? 'driver_me';
+          final driverVehicle = cur.acceptedOffer?.driverVehicle ?? 'Moto';
+          final driverPlate = cur.acceptedOffer?.driverPlate ?? '';
           final finalPrice = cur.acceptedOffer?.price ?? cur.offeredPrice;
+          final paymentMethod = cur.paymentMethod;
+          final distKm = _roadDistanceKm > 0 ? _roadDistanceKm : 1.0;
           rideState = 'idle';
           acceptedDriver = null;
           driverOffers.clear();
           _driverToPickupRoutePoints.clear();
           _driverCurrentPoint = null;
+
+          // ─── Guardar el viaje en el historial del pasajero ───
+          final userId = AuthService().currentUser?.id ?? '';
+          final newTrip = PassengerCompletedTrip(
+            id: 'ptrip_${DateTime.now().millisecondsSinceEpoch}',
+            driverName: driverN,
+            driverVehicle: driverVehicle,
+            driverPlate: driverPlate,
+            pickupAddress: cur.pickupAddress.isNotEmpty ? cur.pickupAddress : _originController.text,
+            dropoffAddress: cur.dropoffAddress.isNotEmpty ? cur.dropoffAddress : _destController.text,
+            price: finalPrice,
+            distanceKm: distKm,
+            timestamp: DateTime.now(),
+            paymentMethod: paymentMethod,
+            rating: 5.0,
+          );
+          if (userId.isNotEmpty) {
+            PassengerTripHistoryService().addTrip(userId: userId, trip: newTrip);
+          }
+          // ─────────────────────────────────────────────────────
 
           double selectedRating = 5.0;
 
@@ -349,6 +380,14 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                     onPressed: () {
+                      // Guardar calificación en historial del pasajero
+                      if (userId.isNotEmpty) {
+                        PassengerTripHistoryService().updateLatestTripRating(
+                          userId: userId,
+                          rating: selectedRating,
+                        );
+                      }
+                      // También notificar al chofer
                       TripHistoryService().updateLatestTripRating(
                         driverId: driverId,
                         rating: selectedRating,
@@ -2216,6 +2255,212 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     );
   }
 
+  void _showPassengerTripHistory() {
+    final userId = AuthService().currentUser?.id ?? '';
+    if (userId.isNotEmpty) {
+      PassengerTripHistoryService().load(userId);
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        builder: (_, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: BeachColors.pureWhite,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+          ),
+          child: Column(
+            children: [
+              // Handle
+              Center(
+                child: Container(
+                  margin: const EdgeInsets.only(top: 10, bottom: 6),
+                  width: 38, height: 4,
+                  decoration: BoxDecoration(
+                    color: BeachColors.lagoonBorder,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+              // Encabezado
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 6, 20, 14),
+                child: Row(
+                  children: [
+                    const Icon(Icons.history, color: BeachColors.oceanPrimary, size: 22),
+                    const SizedBox(width: 10),
+                    const Text(
+                      'Mis Viajes',
+                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: BeachColors.textMain),
+                    ),
+                    const Spacer(),
+                    AnimatedBuilder(
+                      animation: PassengerTripHistoryService(),
+                      builder: (ctx1, widget1) {
+                        final svc = PassengerTripHistoryService();
+                        return Text(
+                          '\$${svc.totalSpent.toStringAsFixed(2)} gastado',
+                          style: const TextStyle(fontSize: 12, color: BeachColors.textSecondary),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: BeachColors.lagoonBorder),
+              // Lista
+              Expanded(
+                child: AnimatedBuilder(
+                  animation: PassengerTripHistoryService(),
+                  builder: (ctx2, widget2) {
+                    final trips = PassengerTripHistoryService().trips;
+                    if (trips.isEmpty) {
+                      return const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.route_outlined, size: 54, color: BeachColors.lagoonBorder),
+                            SizedBox(height: 14),
+                            Text(
+                              'Aún no tienes viajes completados',
+                              style: TextStyle(fontSize: 14, color: BeachColors.textSecondary),
+                            ),
+                            SizedBox(height: 6),
+                            Text(
+                              'Solicita tu primer viaje en Carúpano',
+                              style: TextStyle(fontSize: 12, color: BeachColors.textMuted),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+                    return ListView.separated(
+                      controller: scrollController,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      itemCount: trips.length,
+                      separatorBuilder: (sep, i) => const SizedBox(height: 10),
+                      itemBuilder: (_, i) => _buildTripCard(trips[i]),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTripCard(PassengerCompletedTrip trip) {
+    final dateStr = DateFormat('dd MMM yyyy • HH:mm', 'es').format(trip.timestamp);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: BeachColors.backgroundSand,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BeachColors.lagoonBorder, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Fila superior: fecha + precio
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(dateStr, style: const TextStyle(fontSize: 11, color: BeachColors.textMuted)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: BeachColors.emeraldSuccess,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '\$${trip.price.toStringAsFixed(2)}',
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Origen → Destino
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
+                children: [
+                  const Icon(Icons.trip_origin, color: BeachColors.oceanPrimary, size: 15),
+                  Container(width: 1.5, height: 22, color: BeachColors.lagoonBorder),
+                  const Icon(Icons.location_on_rounded, color: Color(0xFFEF4444), size: 15),
+                ],
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      trip.pickupAddress.isNotEmpty ? trip.pickupAddress : 'Punto de recogida',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: BeachColors.textMain),
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      trip.dropoffAddress.isNotEmpty ? trip.dropoffAddress : 'Destino',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: BeachColors.textMain),
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const Divider(height: 1, color: BeachColors.lagoonBorder),
+          const SizedBox(height: 8),
+          // Datos del conductor + calificación
+          Row(
+            children: [
+              const CircleAvatar(
+                radius: 14,
+                backgroundColor: BeachColors.oceanLight,
+                child: Icon(Icons.sports_motorsports, color: BeachColors.oceanPrimary, size: 16),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      trip.driverName,
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                    Text(
+                      '${trip.driverVehicle} • ${trip.driverPlate} • ${trip.distanceKm.toStringAsFixed(1)} km',
+                      style: const TextStyle(fontSize: 10.5, color: BeachColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+              // Calificación
+              Row(
+                children: List.generate(5, (i) => Icon(
+                  i < trip.rating.round() ? Icons.star_rounded : Icons.star_outline_rounded,
+                  color: const Color(0xFFF59E0B),
+                  size: 14,
+                )),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildInDriveDrawer() {
     return Drawer(
       backgroundColor: BeachColors.pureWhite,
@@ -2279,7 +2524,10 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                 color: BeachColors.textSecondary, size: 21),
             title: const Text('Mis Viajes',
                 style: TextStyle(fontSize: 13, color: BeachColors.textMain)),
-            onTap: () => Navigator.pop(context),
+            onTap: () {
+              Navigator.pop(context);
+              _showPassengerTripHistory();
+            },
           ),
           ListTile(
             leading: const Icon(Icons.account_balance_wallet_outlined,
