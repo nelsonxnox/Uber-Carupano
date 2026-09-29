@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../theme/beach_colors.dart';
 import '../../services/driver_profile_service.dart';
+import '../../services/auth_service.dart';
 
 class DriverRegisterScreen extends StatefulWidget {
   final VoidCallback onProfileSaved;
@@ -24,6 +25,7 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
   @override
   void initState() {
     super.initState();
+    final currentUser = AuthService().currentUser;
     final existing = DriverProfileService().currentProfile;
     if (existing != null) {
       _nameController.text = existing.fullName;
@@ -32,6 +34,9 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
       _modelController.text = existing.vehicleModel;
       _colorController.text = existing.vehicleColor;
       _plateController.text = existing.vehiclePlate;
+    } else if (currentUser != null) {
+      _nameController.text = currentUser.fullName;
+      _phoneController.text = currentUser.phone;
     }
   }
 
@@ -50,9 +55,8 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
 
     setState(() => _isLoading = true);
 
-    final service = DriverProfileService();
-    final existing = service.currentProfile;
-    final id = existing?.id ?? 'driver_${DateTime.now().millisecondsSinceEpoch}';
+    final currentUser = AuthService().currentUser;
+    final id = currentUser?.id ?? 'driver_${DateTime.now().millisecondsSinceEpoch}';
 
     final profile = DriverProfile(
       id: id,
@@ -64,7 +68,7 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
       vehiclePlate: _plateController.text.trim().toUpperCase(),
     );
 
-    await service.saveProfile(profile);
+    await DriverProfileService().saveProfile(profile, userId: id);
 
     if (mounted) {
       setState(() => _isLoading = false);

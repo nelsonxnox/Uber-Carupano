@@ -58,7 +58,6 @@ class TripHistoryService extends ChangeNotifier {
   factory TripHistoryService() => _instance;
   TripHistoryService._();
 
-  static const _prefKey = 'driver_trip_history';
   final List<CompletedTrip> _trips = [];
 
   List<CompletedTrip> get trips => List.unmodifiable(_trips);
@@ -72,10 +71,19 @@ class TripHistoryService extends ChangeNotifier {
     return rated.fold(0.0, (acc, t) => acc + t.passengerRating) / rated.length;
   }
 
-  Future<void> load() async {
+  String _prefKey(String driverId) => 'driver_trip_history_$driverId';
+
+  Future<void> load([String? driverId]) async {
+    _currentDriverId = driverId;
+    _trips.clear();
+    if (driverId == null || driverId.isEmpty) {
+      notifyListeners();
+      return;
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_prefKey);
+      final raw = prefs.getString(_prefKey(driverId));
       if (raw != null) {
         final list = json.decode(raw) as List<dynamic>;
         _trips.clear();
@@ -86,15 +94,31 @@ class TripHistoryService extends ChangeNotifier {
     } catch (e) {
       debugPrint('TripHistoryService load error: $e');
     }
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('drivers')
+          .doc(driverId)
+          .collection('trips')
+          .orderBy('timestamp', descending: true)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        _trips.clear();
+        _trips.addAll(snap.docs.map((d) => CompletedTrip.fromMap(d.data())));
+        notifyListeners();
+        await _persist(driverId);
+      }
+    } catch (_) {}
   }
 
   Future<void> addTrip({
     required String driverId,
     required CompletedTrip trip,
   }) async {
+    _currentDriverId = driverId;
     _trips.insert(0, trip);
     notifyListeners();
-    await _persist();
+    await _persist(driverId);
     try {
       await FirebaseFirestore.instance
           .collection('drivers')
@@ -126,24 +150,24 @@ class TripHistoryService extends ChangeNotifier {
       );
       _trips[0] = updated;
       notifyListeners();
-      await _persist();
+      await _persist(driverId);
       try {
         await FirebaseFirestore.instance
-            .collection('drivers')
-            .doc(driverId)
-            .collection('trips')
-            .doc(updated.id)
-            .set(updated.toMap(), SetOptions(merge: true));
+          .collection('drivers')
+          .doc(driverId)
+          .collection('trips')
+          .doc(updated.id)
+          .set(updated.toMap(), SetOptions(merge: true));
       } catch (e) {
         debugPrint('TripHistoryService Firestore rating error: $e');
       }
     }
   }
 
-  Future<void> _persist() async {
+  Future<void> _persist(String driverId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_prefKey, json.encode(_trips.map((t) => t.toMap()).toList()));
+      await prefs.setString(_prefKey(driverId), json.encode(_trips.map((t) => t.toMap()).toList()));
     } catch (e) {
       debugPrint('TripHistoryService persist error: $e');
     }

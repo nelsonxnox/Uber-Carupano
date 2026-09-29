@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'auth_service.dart';
 
 class DriverProfile {
   final String id;
@@ -64,65 +67,81 @@ class DriverProfileService {
   DriverProfile? _currentProfile;
   DriverProfile? get currentProfile => _currentProfile;
 
-  static const String _prefKeyId = 'driver_profile_id';
-  static const String _prefKeyName = 'driver_profile_name';
-  static const String _prefKeyPhone = 'driver_profile_phone';
-  static const String _prefKeyVehicleType = 'driver_profile_v_type';
-  static const String _prefKeyVehicleModel = 'driver_profile_v_model';
-  static const String _prefKeyVehicleColor = 'driver_profile_v_color';
-  static const String _prefKeyVehiclePlate = 'driver_profile_v_plate';
+  String _prefKeyForUser(String userId) => 'driver_profile_user_$userId';
 
-  Future<DriverProfile?> loadProfile() async {
-    final prefs = await SharedPreferences.getInstance();
-    final id = prefs.getString(_prefKeyId);
-    final name = prefs.getString(_prefKeyName);
+  void resetMemory() {
+    _currentProfile = null;
+  }
 
-    if (id == null || name == null || name.trim().isEmpty) {
+  /// Carga el perfil del chofer perteneciente EXCLUSIVAMENTE a este usuario.
+  Future<DriverProfile?> loadProfile([String? targetUserId]) async {
+    final userId = targetUserId ?? AuthService().currentUser?.id;
+    if (userId == null || userId.isEmpty) {
       _currentProfile = null;
       return null;
     }
 
-    _currentProfile = DriverProfile(
-      id: id,
-      fullName: name,
-      phone: prefs.getString(_prefKeyPhone) ?? '',
-      vehicleType: prefs.getString(_prefKeyVehicleType) ?? 'moto',
-      vehicleModel: prefs.getString(_prefKeyVehicleModel) ?? '',
-      vehicleColor: prefs.getString(_prefKeyVehicleColor) ?? '',
-      vehiclePlate: prefs.getString(_prefKeyVehiclePlate) ?? '',
-    );
+    final prefs = await SharedPreferences.getInstance();
 
-    return _currentProfile;
+    // 1. Limpiar keys legacy antiguas para que no interfieran entre usuarios
+    if (prefs.containsKey('driver_profile_id')) {
+      await prefs.remove('driver_profile_id');
+      await prefs.remove('driver_profile_name');
+    }
+
+    // 2. Intentar cargar desde SharedPreferences específico de este usuario
+    final rawJson = prefs.getString(_prefKeyForUser(userId));
+    if (rawJson != null && rawJson.isNotEmpty) {
+      try {
+        final map = json.decode(rawJson) as Map<String, dynamic>;
+        _currentProfile = DriverProfile.fromMap(map, userId);
+        return _currentProfile;
+      } catch (e) {
+        debugPrint('Error parseando driver_profile local: $e');
+      }
+    }
+
+    // 3. Buscar en Firestore en la colección drivers/{userId}
+    try {
+      final doc = await FirebaseFirestore.instance.collection('drivers').doc(userId).get();
+      if (doc.exists && doc.data() != null) {
+        final profile = DriverProfile.fromMap(doc.data()!, userId);
+        _currentProfile = profile;
+        await prefs.setString(_prefKeyForUser(userId), json.encode(profile.toMap()));
+        return _currentProfile;
+      }
+    } catch (e) {
+      debugPrint('Error cargando conductor de Firestore: $e');
+    }
+
+    _currentProfile = null;
+    return null;
   }
 
-  Future<void> saveProfile(DriverProfile profile) async {
+  /// Guarda el perfil del chofer vinculado a la cuenta del usuario
+  Future<void> saveProfile(DriverProfile profile, {String? userId}) async {
+    final effectiveUserId = userId ?? profile.id;
     _currentProfile = profile;
+
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefKeyId, profile.id);
-    await prefs.setString(_prefKeyName, profile.fullName);
-    await prefs.setString(_prefKeyPhone, profile.phone);
-    await prefs.setString(_prefKeyVehicleType, profile.vehicleType);
-    await prefs.setString(_prefKeyVehicleModel, profile.vehicleModel);
-    await prefs.setString(_prefKeyVehicleColor, profile.vehicleColor);
-    await prefs.setString(_prefKeyVehiclePlate, profile.vehiclePlate);
+    await prefs.setString(_prefKeyForUser(effectiveUserId), json.encode(profile.toMap()));
 
     try {
       await FirebaseFirestore.instance
           .collection('drivers')
-          .doc(profile.id)
+          .doc(effectiveUserId)
           .set(profile.toMap(), SetOptions(merge: true));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Error guardando perfil de chofer en Firestore: $e');
+    }
   }
 
-  Future<void> clearProfile() async {
+  Future<void> clearProfile([String? targetUserId]) async {
+    final userId = targetUserId ?? AuthService().currentUser?.id;
     _currentProfile = null;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_prefKeyId);
-    await prefs.remove(_prefKeyName);
-    await prefs.remove(_prefKeyPhone);
-    await prefs.remove(_prefKeyVehicleType);
-    await prefs.remove(_prefKeyVehicleModel);
-    await prefs.remove(_prefKeyVehicleColor);
-    await prefs.remove(_prefKeyVehiclePlate);
+    if (userId != null && userId.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_prefKeyForUser(userId));
+    }
   }
 }

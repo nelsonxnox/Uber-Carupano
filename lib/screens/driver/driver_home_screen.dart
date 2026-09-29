@@ -50,13 +50,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     super.initState();
     _loadProfile();
     _tripHistory.addListener(_onTripHistoryChanged);
-    _tripHistory.load().then((_) {
-      if (mounted) {
-        setState(() {
-          driverWallet = _tripHistory.totalEarnings;
-        });
-      }
-    });
     _initDriverGps();
     _rideService.addListener(_onRideServiceChanged);
     if (_rideService.activeRides.isNotEmpty) {
@@ -122,13 +115,25 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Future<void> _loadProfile() async {
-    final prof = await _profileService.loadProfile();
+    final userId = AuthService().currentUser?.id;
+    final prof = await _profileService.loadProfile(userId);
     if (mounted) {
       setState(() {
         _profile = prof;
         _isLoadingProfile = false;
-        driverWallet = _tripHistory.totalEarnings;
       });
+      if (prof != null) {
+        await _tripHistory.load(prof.id);
+        if (mounted) {
+          setState(() {
+            driverWallet = _tripHistory.totalEarnings;
+          });
+        }
+      } else {
+        setState(() {
+          driverWallet = 0.0;
+        });
+      }
     }
   }
 
