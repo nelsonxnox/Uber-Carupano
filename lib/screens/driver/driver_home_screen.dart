@@ -47,6 +47,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   // Ruta activa: chofer→recogida (heading) o recogida→destino (in_trip)
   List<LatLng> _activeRoutePoints = [];
+  bool _showDriverChatBanner = true; // Pestaña informativa de chat para el chofer
+
 
   @override
   void initState() {
@@ -1013,9 +1015,59 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // ── Pestaña Informativa del Chat (afuera, con botón de cerrar/aceptar) ──
+          if (_showDriverChatBanner)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: BeachColors.oceanPrimary.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.chat_bubble_outline_rounded,
+                      size: 16, color: BeachColors.oceanPrimary),
+                  const SizedBox(width: 6),
+                  const Expanded(
+                    child: Text(
+                      '💬 Usa el chat si necesitas confirmar la ubicación exacta o el pago.',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1E3A8A),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  InkWell(
+                    onTap: () => setState(() => _showDriverChatBanner = false),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: BeachColors.oceanPrimary,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        'Entendido',
+                        style: TextStyle(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
           // ── Tarjeta de info del viaje ──────────────────────────────────
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+
             decoration: BoxDecoration(
               color: BeachColors.pureWhite,
               borderRadius: BorderRadius.circular(14),

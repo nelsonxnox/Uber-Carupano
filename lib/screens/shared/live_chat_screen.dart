@@ -36,25 +36,27 @@ class LiveChatSheet extends StatefulWidget {
     if (isDesktopWeb) {
       return showDialog(
         context: context,
-        builder: (_) => Center(
+        builder: (_) => Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 400, maxHeight: 680),
+            constraints: const BoxConstraints(maxWidth: 420, maxHeight: 600),
             child: Material(
-              color: Colors.transparent,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: LiveChatSheet(
-                  rideId: rideId,
-                  currentUserId: currentUserId,
-                  currentUserName: currentUserName,
-                  isDriver: isDriver,
-                ),
+              color: BeachColors.pureWhite,
+              borderRadius: BorderRadius.circular(20),
+              clipBehavior: Clip.antiAlias,
+              child: LiveChatSheet(
+                rideId: rideId,
+                currentUserId: currentUserId,
+                currentUserName: currentUserName,
+                isDriver: isDriver,
               ),
             ),
           ),
         ),
       );
     }
+
 
     return showModalBottomSheet(
       context: context,
@@ -215,30 +217,17 @@ class _LiveChatSheetState extends State<LiveChatSheet> {
     final keyboardH = MediaQuery.of(context).viewInsets.bottom;
     final isDesktopWeb = kIsWeb && MediaQuery.of(context).size.width > 500;
 
-    final double chatH;
-    if (isDesktopWeb) {
-      chatH = 720;
-    } else {
-      final screenH = MediaQuery.of(context).size.height;
-      chatH = (screenH * 0.72 + keyboardH).clamp(0.0, screenH - 40);
-    }
-
-    return Material(
-      color: BeachColors.pureWhite,
-      borderRadius: BorderRadius.vertical(
-        top: Radius.circular(isDesktopWeb ? 20 : 22),
-        bottom: Radius.circular(isDesktopWeb ? 20 : 0),
-      ),
-      child: Container(
-        height: chatH,
-        decoration: BoxDecoration(
-          color: BeachColors.pureWhite,
-          borderRadius: BorderRadius.vertical(
-            top: Radius.circular(isDesktopWeb ? 20 : 22),
-            bottom: Radius.circular(isDesktopWeb ? 20 : 0),
-          ),
+    return Container(
+      height: isDesktopWeb ? 580 : (MediaQuery.of(context).size.height * 0.72 + keyboardH).clamp(0.0, MediaQuery.of(context).size.height - 40),
+      decoration: BoxDecoration(
+        color: BeachColors.pureWhite,
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(isDesktopWeb ? 20 : 22),
+          bottom: Radius.circular(isDesktopWeb ? 20 : 0),
         ),
-        child: Column(
+      ),
+      child: Column(
+
           children: [
             // ── Handle ──────────────────────────────────────────────────
             Container(
@@ -408,9 +397,9 @@ class _LiveChatSheetState extends State<LiveChatSheet> {
           ),
         ],
       ),
-    ),
-  );
-}
+    );
+  }
+
 
 
   Widget _buildBubble(_ChatMsg msg, bool isMe) {

@@ -147,6 +147,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
   List<Map<String, dynamic>> driverOffers = [];
   Map<String, dynamic>? acceptedDriver;
+  bool _showChatPromptBanner = true; // Pestaña de recomendación de chat al iniciar
+
 
   // Trazado de ruta real por calles (OSRM)
   List<LatLng> _routePoints = [];
@@ -1975,9 +1977,59 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // ── Pestaña Informativa del Chat (afuera, con botón de cerrar/aceptar) ──
+          if (_showChatPromptBanner)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: BeachColors.oceanPrimary.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.chat_bubble_outline_rounded,
+                      size: 18, color: BeachColors.oceanPrimary),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      '💬 Te sugerimos usar el chat para acordar detalles clave (cambio en efectivo, punto exacto).',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1E3A8A),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  InkWell(
+                    onTap: () => setState(() => _showChatPromptBanner = false),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: BeachColors.oceanPrimary,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text(
+                        'Entendido',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
+
               color: statusBg,
               borderRadius: BorderRadius.circular(10),
             ),
