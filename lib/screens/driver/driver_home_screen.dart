@@ -45,6 +45,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   RideRequest? _activeAcceptedRide;
   String _activeRideStep = 'heading_to_pickup'; // 'heading_to_pickup', 'arrived', 'in_trip', 'completed'
 
+  // Ruta activa: chofer→recogida (heading) o recogida→destino (in_trip)
+  List<LatLng> _activeRoutePoints = [];
+
   @override
   void initState() {
     super.initState();
@@ -114,6 +117,59 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _gpsStreamSub = null;
   }
 
+  /// Traza la ruta OSRM para el viaje activo:
+  /// - heading_to_pickup / arrived : chofer → punto de recogida
+  /// - in_trip                     : recogida → destino
+  /// Se llama MANUALMENTE en dos momentos concretos, sin GPS automático.
+  Future<void> _fetchActiveRouteForDriver() async {
+    final ride = _activeAcceptedRide;
+    if (ride == null) return;
+
+    final LatLng origin = (_activeRideStep == 'in_trip')
+        ? ride.pickupPoint
+        : _driverLocation;
+    final LatLng destination = (_activeRideStep == 'in_trip')
+        ? ride.dropoffPoint
+        : ride.pickupPoint;
+
+    try {
+      final url = Uri.parse(
+        'https://router.project-osrm.org/route/v1/driving/'
+        '${origin.longitude},${origin.latitude};'
+        '${destination.longitude},${destination.latitude}'
+        '?overview=full&geometries=geojson',
+      );
+      final response = await http.get(url).timeout(const Duration(seconds: 6));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['code'] == 'Ok' &&
+            data['routes'] != null &&
+            (data['routes'] as List).isNotEmpty) {
+          final coords = data['routes'][0]['geometry']['coordinates'] as List;
+          final pts = coords
+              .map<LatLng>((c) => LatLng(
+                    (c[1] as num).toDouble(),
+                    (c[0] as num).toDouble(),
+                  ))
+              .toList();
+          if (mounted) {
+            setState(() => _activeRoutePoints = pts);
+            // Centrar mapa entre los dos puntos del tramo actual
+            _mapController.move(
+              LatLng(
+                (origin.latitude + destination.latitude) / 2,
+                (origin.longitude + destination.longitude) / 2,
+              ),
+              13.5,
+            );
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Driver OSRM active route error: $e');
+    }
+  }
+
   Future<void> _loadProfile() async {
     final userId = AuthService().currentUser?.id;
     final prof = await _profileService.loadProfile(userId);
@@ -181,6 +237,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             if (ride.status == 'accepted' && ride.acceptedOffer?.id == myId) {
               _activeAcceptedRide = ride;
               _activeRideStep = 'heading_to_pickup';
+              _activeRoutePoints = [];
+              _inspectedRoutePoints = [];
+              _inspectedRide = null;
               _pendingOfferRideIds.remove(rideId);
 
               WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -198,10 +257,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                       duration: const Duration(seconds: 4),
                     ),
                   );
+                  // Trazar ruta al punto de recogida
+                  _fetchActiveRouteForDriver();
                 }
               });
               break;
             }
+
             // CASO 2: El pasajero seleccionó a OTRO chofer
             else if (ride.status == 'accepted' || ride.status == 'in_progress') {
               if (ride.acceptedOffer?.id != myId) {
@@ -388,25 +450,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   void _advanceActiveRideStep() {
     if (_activeAcceptedRide == null) return;
 
-    if (_activeRideStep == 'heading_to_pickup') {
-      setState(() => _activeRideStep = 'arrived');
+    // ── PASO 1: Pasajero a bordo → Iniciar Viaje ─────────────────────────
+    // Fusiona "llegué" + "iniciar": envía 'arrived' y luego 'in_progress' juntos.
+    // El pasajero ya ve la posición del chofer en tiempo real en su mapa.
+    if (_activeRideStep == 'heading_to_pickup' || _activeRideStep == 'arrived') {
       _rideService.updateRideStatus(rideId: _activeAcceptedRide!.id, newStatus: 'arrived');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Notificación enviada: ¡Llegaste al punto de recogida!'),
-          backgroundColor: BeachColors.emeraldSuccess,
-        ),
-      );
-    } else if (_activeRideStep == 'arrived') {
-      setState(() => _activeRideStep = 'in_trip');
       _rideService.updateRideStatus(rideId: _activeAcceptedRide!.id, newStatus: 'in_progress');
+      setState(() {
+        _activeRideStep = 'in_trip';
+        _activeRoutePoints = []; // Limpiar para redibujar hacia destino
+      });
+      // Trazar nueva ruta: recogida → destino
+      _fetchActiveRouteForDriver();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Viaje iniciado rumbo al destino.'),
+          content: Text('🚀 ¡Viaje iniciado! Rumbo al destino.'),
           backgroundColor: BeachColors.oceanPrimary,
+          duration: Duration(seconds: 3),
         ),
       );
     } else if (_activeRideStep == 'in_trip') {
+
       final ride = _activeAcceptedRide!;
       final earned = ride.acceptedOffer?.price ?? ride.offeredPrice;
       final dId = _profile?.id ?? 'driver_me';
@@ -589,71 +653,78 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final double mapHeight = constraints.maxHeight * 0.38;
+          // Mapa más grande cuando hay viaje activo (el chofer necesita ver la ruta)
+          final double mapHeight = _activeAcceptedRide != null
+              ? constraints.maxHeight * 0.62
+              : constraints.maxHeight * 0.38;
 
           return Column(
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                color: BeachColors.pureWhite,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: BeachColors.oceanLight,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(Icons.account_balance_wallet_outlined,
-                              color: BeachColors.oceanPrimary, size: 16),
-                        ),
-                        const SizedBox(width: 8),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('Billetera',
-                                style: TextStyle(color: BeachColors.textMuted, fontSize: 9.5)),
-                            Text(
-                              '\$${driverWallet.toStringAsFixed(2)} USD',
-                              style: const TextStyle(
-                                color: BeachColors.textMain,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13,
-                              ),
+              // ─── Barra de Billetera + Estado (solo visible sin viaje activo) ───
+              if (_activeAcceptedRide == null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  color: BeachColors.pureWhite,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: BeachColors.oceanLight,
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    Row(
-                      children: [
-                        Text(
-                          isOnline ? 'En línea' : 'Pausa',
-                          style: TextStyle(
-                            color: isOnline ? BeachColors.emeraldSuccess : BeachColors.textMuted,
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w600,
+                            child: const Icon(Icons.account_balance_wallet_outlined,
+                                color: BeachColors.oceanPrimary, size: 16),
                           ),
-                        ),
-                        const SizedBox(width: 4),
-                        Transform.scale(
-                          scale: 0.75,
-                          child: Switch(
-                            value: isOnline,
-                            activeThumbColor: BeachColors.oceanPrimary,
-                            onChanged: (val) => setState(() => isOnline = val),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Billetera',
+                                  style: TextStyle(color: BeachColors.textMuted, fontSize: 9.5)),
+                              Text(
+                                '\$${driverWallet.toStringAsFixed(2)} USD',
+                                style: const TextStyle(
+                                  color: BeachColors.textMain,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          Text(
+                            isOnline ? 'En línea' : 'Pausa',
+                            style: TextStyle(
+                              color: isOnline ? BeachColors.emeraldSuccess : BeachColors.textMuted,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Transform.scale(
+                            scale: 0.75,
+                            child: Switch(
+                              value: isOnline,
+                              activeThumbColor: BeachColors.oceanPrimary,
+                              onChanged: (val) => setState(() => isOnline = val),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              Container(height: 1, color: BeachColors.lagoonBorder),
+                Container(height: 1, color: BeachColors.lagoonBorder),
+              ],
 
+              // ─── MAPA ──────────────────────────────────────────────────────────
               SizedBox(
                 height: mapHeight,
                 child: Stack(
@@ -672,7 +743,25 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                           userAgentPackageName: 'com.carupano.riders',
                         ),
 
-                        if (_inspectedRoutePoints.isNotEmpty)
+                        // ── Ruta del viaje activo (chofer→recogida o recogida→destino) ──
+                        if (_activeAcceptedRide != null && _activeRoutePoints.isNotEmpty)
+                          PolylineLayer(
+                            polylines: [
+                              Polyline(
+                                points: _activeRoutePoints,
+                                strokeWidth: 5.5,
+                                color: _activeRideStep == 'in_trip'
+                                    ? BeachColors.oceanPrimary
+                                    : BeachColors.emeraldSuccess,
+                                borderColor: _activeRideStep == 'in_trip'
+                                    ? const Color(0xFF0369A1)
+                                    : const Color(0xFF047857),
+                                borderStrokeWidth: 1.5,
+                              ),
+                            ],
+                          )
+                        // ── Ruta inspeccionada en el radar ──────────────────────────
+                        else if (_inspectedRoutePoints.isNotEmpty)
                           PolylineLayer(
                             polylines: [
                               Polyline(
@@ -687,6 +776,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
                         MarkerLayer(
                           markers: [
+                            // ── Posición del chofer ─────────────────────────────────
                             Marker(
                               point: _driverLocation,
                               width: 36,
@@ -707,7 +797,71 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                               ),
                             ),
 
-                            if (_inspectedRide != null)
+                            // ── Marcadores del viaje ACTIVO ─────────────────────────
+                            if (_activeAcceptedRide != null) ...[
+                              Marker(
+                                point: _activeAcceptedRide!.pickupPoint,
+                                width: 90,
+                                height: 30,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: BeachColors.emeraldSuccess,
+                                    borderRadius: BorderRadius.circular(10),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(alpha: 0.15),
+                                        blurRadius: 4,
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.trip_origin, size: 10, color: Colors.white),
+                                      SizedBox(width: 3),
+                                      Text('Recogida',
+                                          style: TextStyle(
+                                              fontSize: 9,
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              Marker(
+                                point: _activeAcceptedRide!.dropoffPoint,
+                                width: 80,
+                                height: 30,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEF4444),
+                                    borderRadius: BorderRadius.circular(10),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(alpha: 0.15),
+                                        blurRadius: 4,
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.location_on, size: 10, color: Colors.white),
+                                      SizedBox(width: 3),
+                                      Text('Destino',
+                                          style: TextStyle(
+                                              fontSize: 9,
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ]
+                            // ── Marcadores del viaje inspeccionado en radar ──────────
+                            else if (_inspectedRide != null) ...[
                               Marker(
                                 point: _inspectedRide!.pickupPoint,
                                 width: 100,
@@ -735,8 +889,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                   ),
                                 ),
                               ),
-
-                            if (_inspectedRide != null)
                               Marker(
                                 point: _inspectedRide!.dropoffPoint,
                                 width: 100,
@@ -764,11 +916,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                   ),
                                 ),
                               ),
+                            ],
                           ],
                         ),
                       ],
                     ),
 
+                    // ── Etiqueta flotante en el mapa ───────────────────────────────
                     Positioned(
                       top: 8,
                       left: 10,
@@ -783,16 +937,47 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                         ),
                         child: Text(
                           _activeAcceptedRide != null
-                              ? 'Viaje en Curso'
+                              ? (_activeRideStep == 'in_trip' ? '🚀 Viaje en Curso' : '📍 En camino al pasajero')
                               : 'Radar Carúpano (${activeRides.where((r) => r.status == "searching" || r.status == "negotiating").length} viajes)',
                           style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: BeachColors.textMain),
                         ),
                       ),
                     ),
+
+                    // ── Billetera flotante visible durante el viaje activo ──────────
+                    if (_activeAcceptedRide != null)
+                      Positioned(
+                        top: 8,
+                        right: 10,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: BeachColors.pureWhite,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 4),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.account_balance_wallet_outlined,
+                                  color: BeachColors.oceanPrimary, size: 13),
+                              const SizedBox(width: 4),
+                              Text(
+                                '\$${driverWallet.toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                    fontSize: 11, fontWeight: FontWeight.w700, color: BeachColors.textMain),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
 
+              // ─── Panel inferior (radar o viaje activo) ─────────────────────────
               Expanded(
                 child: _activeAcceptedRide != null
                     ? _buildActiveTripPanel()
@@ -811,122 +996,117 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final ride = _activeAcceptedRide!;
     final price = ride.acceptedOffer?.price ?? ride.offeredPrice;
 
-    String stepLabel = 'En camino a recoger pasajero';
-    String buttonText = '¡Ya llegué al punto de recogida!';
-    Color buttonColor = BeachColors.oceanPrimary;
+    // ── Configuración del botón principal según el paso ──────────────────
+    final bool isInTrip = _activeRideStep == 'in_trip';
+    final String buttonText = isInTrip
+        ? 'Llegué al destino — Cobrar \$${price.toStringAsFixed(2)}'
+        : 'Pasajero a bordo → Iniciar Viaje';
+    final Color buttonColor =
+        isInTrip ? const Color(0xFF0F172A) : BeachColors.emeraldSuccess;
+    final String stepLabel = isInTrip
+        ? '🚀 En viaje hacia el destino'
+        : '📍 En camino a recoger al pasajero';
 
-    if (_activeRideStep == 'arrived') {
-      stepLabel = 'Esperando a ${ride.passengerName}';
-      buttonText = 'Pasajero a bordo (Iniciar Viaje)';
-      buttonColor = BeachColors.emeraldSuccess;
-    } else if (_activeRideStep == 'in_trip') {
-      stepLabel = 'En viaje hacia ${ride.dropoffAddress}';
-      buttonText = 'Finalizar viaje y cobrar \$${price.toStringAsFixed(2)}';
-      buttonColor = const Color(0xFF0F172A);
-    }
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(14),
+    return Container(
+      color: BeachColors.backgroundSand,
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
+          // ── Tarjeta de info del viaje ──────────────────────────────────
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               color: BeachColors.pureWhite,
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: BeachColors.lagoonBorder),
             ),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Pasajero + precio
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Row(
                       children: [
                         const CircleAvatar(
-                          radius: 18,
+                          radius: 16,
                           backgroundColor: BeachColors.oceanLight,
-                          child: Icon(Icons.person, color: BeachColors.oceanPrimary, size: 20),
+                          child: Icon(Icons.person, color: BeachColors.oceanPrimary, size: 18),
                         ),
-                        const SizedBox(width: 10),
+                        const SizedBox(width: 8),
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              ride.passengerName,
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: BeachColors.textMain),
-                            ),
-                            Text(
-                              stepLabel,
-                              style: const TextStyle(fontSize: 10.5, color: BeachColors.emeraldSuccess, fontWeight: FontWeight.w600),
-                            ),
+                            Text(ride.passengerName,
+                                style: const TextStyle(
+                                    fontSize: 13, fontWeight: FontWeight.w700, color: BeachColors.textMain)),
+                            Text(stepLabel,
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: isInTrip ? BeachColors.oceanPrimary : BeachColors.emeraldSuccess,
+                                    fontWeight: FontWeight.w600)),
                           ],
                         ),
                       ],
                     ),
-                    Text(
-                      '\$${price.toStringAsFixed(2)}',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: BeachColors.oceanPrimary),
-                    ),
+                    Text('\$${price.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                            fontSize: 17, fontWeight: FontWeight.w800, color: BeachColors.oceanPrimary)),
                   ],
                 ),
-                const Divider(height: 16, color: BeachColors.lagoonBorder),
+                const SizedBox(height: 8),
+                // Recogida + Destino en una fila compacta
                 Row(
                   children: [
-                    const Icon(Icons.trip_origin, size: 14, color: BeachColors.oceanPrimary),
-                    const SizedBox(width: 8),
+                    const Icon(Icons.trip_origin, size: 12, color: BeachColors.oceanPrimary),
+                    const SizedBox(width: 5),
                     Expanded(
-                      child: Text(
-                        'Recogida: ${ride.pickupAddress}',
-                        style: const TextStyle(fontSize: 11.5, color: BeachColors.textMain, fontWeight: FontWeight.w600),
-                      ),
+                      child: Text(ride.pickupAddress,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 10.5, color: BeachColors.textMain)),
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 3),
                 Row(
                   children: [
-                    const Icon(Icons.location_on, size: 14, color: Color(0xFFEF4444)),
-                    const SizedBox(width: 8),
+                    const Icon(Icons.location_on, size: 12, color: Color(0xFFEF4444)),
+                    const SizedBox(width: 5),
                     Expanded(
-                      child: Text(
-                        'Destino: ${ride.dropoffAddress}',
-                        style: const TextStyle(fontSize: 11.5, color: BeachColors.textMain, fontWeight: FontWeight.w600),
-                      ),
+                      child: Text(ride.dropoffAddress,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 10.5, color: BeachColors.textMain)),
                     ),
                   ],
                 ),
-                if (ride.note.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      const Icon(Icons.notes, size: 13, color: BeachColors.textMuted),
-                      const SizedBox(width: 6),
-                      Text('Nota: ${ride.note}', style: const TextStyle(fontSize: 10.5, color: BeachColors.textSecondary)),
-                    ],
-                  ),
-                ],
               ],
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
+
+          // ── BOTÓN PRINCIPAL (único) ────────────────────────────────────
           SizedBox(
             width: double.infinity,
-            height: 44,
+            height: 46,
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: buttonColor,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 2,
               ),
               onPressed: _advanceActiveRideStep,
-              child: Text(
-                buttonText,
-                style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-              ),
+              child: Text(buttonText,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
             ),
           ),
           const SizedBox(height: 8),
+
+          // ── Fila de acciones secundarias ───────────────────────────────
           Row(
             children: [
               Expanded(
@@ -944,26 +1124,37 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                       isDriver: true,
                     );
                   },
-                  icon: const Icon(Icons.chat_bubble_outline_rounded, size: 16),
-                  label: const Text('Chat con pasajero', style: TextStyle(fontSize: 11.5)),
+                  icon: const Icon(Icons.chat_bubble_outline_rounded, size: 15),
+                  label: const Text('Chat', style: TextStyle(fontSize: 11.5)),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: BeachColors.oceanPrimary,
                     side: const BorderSide(color: BeachColors.oceanPrimary),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    padding: const EdgeInsets.symmetric(vertical: 9),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _activeAcceptedRide = null;
+                      _activeRoutePoints = [];
+                    });
+                    _stopGpsStream();
+                  },
+                  icon: const Icon(Icons.radar, size: 15),
+                  label: const Text('Radar', style: TextStyle(fontSize: 11.5)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: BeachColors.textSecondary,
+                    side: const BorderSide(color: BeachColors.lagoonBorder),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 9),
                   ),
                 ),
               ),
             ],
-          ),
-          Center(
-            child: TextButton(
-              onPressed: () {
-                setState(() => _activeAcceptedRide = null);
-                _stopGpsStream();
-              },
-              child: const Text('Volver al radar de viajes', style: TextStyle(fontSize: 11, color: BeachColors.textSecondary)),
-            ),
           ),
         ],
       ),
@@ -971,6 +1162,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Widget _buildIncomingRequestsList(List<RideRequest> activeRides) {
+
     if (!isOnline) {
       return Center(
         child: Column(
