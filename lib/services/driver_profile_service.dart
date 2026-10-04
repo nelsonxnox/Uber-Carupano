@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
+import 'push_notification_service.dart';
 
 class DriverProfile {
   final String id;
@@ -131,10 +132,17 @@ class DriverProfileService {
           .collection('drivers')
           .doc(effectiveUserId)
           .set(profile.toMap(), SetOptions(merge: true));
+
+      // Sincronizar Device Token (FCM) del chofer
+      PushNotificationService().syncUserToken(
+        userId: effectiveUserId,
+        isDriver: true,
+      );
     } catch (e) {
       debugPrint('Error guardando perfil de chofer en Firestore: $e');
     }
   }
+
 
   Future<void> clearProfile([String? targetUserId]) async {
     final userId = targetUserId ?? AuthService().currentUser?.id;

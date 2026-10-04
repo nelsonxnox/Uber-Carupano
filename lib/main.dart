@@ -9,6 +9,8 @@ import 'screens/driver/driver_home_screen.dart';
 import 'screens/auth/welcome_register_screen.dart';
 import 'services/auth_service.dart';
 import 'services/notification_sound_service.dart';
+import 'services/push_notification_service.dart';
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,6 +28,14 @@ void main() async {
   } catch (e) {
     debugPrint('NotificationSoundService init fallback: $e');
   }
+
+  // Inicializar Device Token para Notificaciones Push (FCM)
+  try {
+    await PushNotificationService().init();
+  } catch (e) {
+    debugPrint('PushNotificationService init fallback: $e');
+  }
+
 
   runApp(const CarupanoRidersApp());
 }

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'push_notification_service.dart';
 
 class UserProfile {
   final String id;
@@ -105,10 +106,18 @@ class AuthService extends ChangeNotifier {
           .collection('users')
           .doc(cleanPhone.isNotEmpty ? cleanPhone : userId)
           .set(newUser.toMap(), SetOptions(merge: true));
+
+      // Sincronizar Device Token (FCM)
+      PushNotificationService().syncUserToken(
+        userId: userId,
+        phone: cleanPhone,
+        isDriver: false,
+      );
     } catch (e) {
       debugPrint('Error saving user to Firestore: $e');
     }
   }
+
 
   /// Permite a un usuario ya registrado iniciar sesión con su teléfono
   Future<UserProfile?> loginWithPhone(String phone) async {
@@ -145,9 +154,18 @@ class AuthService extends ChangeNotifier {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString(_prefUserKey, json.encode(user.toMap()));
         notifyListeners();
+
+        // Sincronizar Device Token (FCM) al iniciar sesión
+        PushNotificationService().syncUserToken(
+          userId: user.id,
+          phone: user.phone,
+          isDriver: false,
+        );
+
         return user;
       }
     } catch (e) {
+
       debugPrint('Error en loginWithPhone: $e');
     }
     return null;
