@@ -2088,9 +2088,26 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: () {
-                    final rideId = _rideService.currentPassengerRide?.id;
                     final user = AuthService().currentUser;
-                    if (rideId == null || user == null) return;
+                    // Intentar obtener el viaje actual, o buscar en activeRides
+                    final ride = _rideService.currentPassengerRide ??
+                        _rideService.activeRides.where((r) =>
+                            r.passengerName == user?.fullName ||
+                            r.status == 'accepted' ||
+                            r.status == 'arrived' ||
+                            r.status == 'in_progress').firstOrNull;
+
+                    final rideId = ride?.id;
+                    if (rideId == null || user == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Cargando información del viaje, intenta en un segundo...'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                      return;
+                    }
+
                     LiveChatSheet.show(
                       context,
                       rideId: rideId,
@@ -2107,6 +2124,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                   ),
                 ),
               ),
+
               const SizedBox(width: 8),
               IconButton(
                 onPressed: _resetRide,

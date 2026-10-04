@@ -38,12 +38,18 @@ class LiveChatSheet extends StatefulWidget {
         context: context,
         builder: (_) => Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 395, maxHeight: 720),
-            child: LiveChatSheet(
-              rideId: rideId,
-              currentUserId: currentUserId,
-              currentUserName: currentUserName,
-              isDriver: isDriver,
+            constraints: const BoxConstraints(maxWidth: 400, maxHeight: 680),
+            child: Material(
+              color: Colors.transparent,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: LiveChatSheet(
+                  rideId: rideId,
+                  currentUserId: currentUserId,
+                  currentUserName: currentUserName,
+                  isDriver: isDriver,
+                ),
+              ),
             ),
           ),
         ),
@@ -54,14 +60,18 @@ class LiveChatSheet extends StatefulWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => LiveChatSheet(
-        rideId: rideId,
-        currentUserId: currentUserId,
-        currentUserName: currentUserName,
-        isDriver: isDriver,
+      builder: (_) => Material(
+        color: Colors.transparent,
+        child: LiveChatSheet(
+          rideId: rideId,
+          currentUserId: currentUserId,
+          currentUserName: currentUserName,
+          isDriver: isDriver,
+        ),
       ),
     );
   }
+
 
   @override
   State<LiveChatSheet> createState() => _LiveChatSheetState();
@@ -133,6 +143,7 @@ class _LiveChatSheetState extends State<LiveChatSheet> {
   }
 
   Future<void> _showLocalNotification(_ChatMsg msg) async {
+    if (kIsWeb) return; // En la web no se usa flutter_local_notifications plugin
     try {
       final vibrationPattern = Int64List.fromList([0, 200, 100, 200]);
       final androidDetails = AndroidNotificationDetails(
@@ -156,6 +167,7 @@ class _LiveChatSheetState extends State<LiveChatSheet> {
       debugPrint('Chat notification error: $e');
     }
   }
+
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -211,74 +223,105 @@ class _LiveChatSheetState extends State<LiveChatSheet> {
       chatH = (screenH * 0.72 + keyboardH).clamp(0.0, screenH - 40);
     }
 
-    return Container(
-      height: chatH,
-      decoration: BoxDecoration(
-        color: BeachColors.pureWhite,
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(isDesktopWeb ? 22 : 22),
-        ),
+    return Material(
+      color: BeachColors.pureWhite,
+      borderRadius: BorderRadius.vertical(
+        top: Radius.circular(isDesktopWeb ? 20 : 22),
+        bottom: Radius.circular(isDesktopWeb ? 20 : 0),
       ),
-      child: Column(
-        children: [
-          // ── Handle ──────────────────────────────────────────────────
-          Container(
-            width: 40,
-            height: 4,
-            margin: const EdgeInsets.only(top: 10, bottom: 6),
-            decoration: BoxDecoration(
-              color: BeachColors.lagoonBorder,
-              borderRadius: BorderRadius.circular(4),
-            ),
+      child: Container(
+        height: chatH,
+        decoration: BoxDecoration(
+          color: BeachColors.pureWhite,
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(isDesktopWeb ? 20 : 22),
+            bottom: Radius.circular(isDesktopWeb ? 20 : 0),
           ),
-
-          // ── Header ──────────────────────────────────────────────────
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: BeachColors.lagoonBorder)),
+        ),
+        child: Column(
+          children: [
+            // ── Handle ──────────────────────────────────────────────────
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(top: 10, bottom: 6),
+              decoration: BoxDecoration(
+                color: BeachColors.lagoonBorder,
+                borderRadius: BorderRadius.circular(4),
+              ),
             ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: BeachColors.oceanLight,
-                    borderRadius: BorderRadius.circular(10),
+
+            // ── Header ──────────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: BeachColors.lagoonBorder)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: BeachColors.oceanLight,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.chat_bubble_outline_rounded,
+                        color: BeachColors.oceanPrimary, size: 18),
                   ),
-                  child: const Icon(Icons.chat_bubble_outline_rounded,
-                      color: BeachColors.oceanPrimary, size: 18),
-                ),
-                const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Chat del Viaje',
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Chat del Viaje',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: BeachColors.textMain,
+                        ),
+                      ),
+                      Text(
+                        widget.isDriver ? 'Hablando con el pasajero' : 'Hablando con el conductor',
+                        style: const TextStyle(
+                            fontSize: 10.5, color: BeachColors.textSecondary),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20, color: BeachColors.textSecondary),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── Banner Educativo sobre la importancia del Chat ───────────────
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              color: const Color(0xFFEFF6FF),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline_rounded, size: 15, color: BeachColors.oceanPrimary),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Usa este chat para acordar punto exacto de encuentro o cambio en efectivo.',
                       style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: BeachColors.textMain,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF1E3A8A),
                       ),
                     ),
-                    Text(
-                      widget.isDriver ? 'Hablando con el pasajero' : 'Hablando con el conductor',
-                      style: const TextStyle(
-                          fontSize: 10.5, color: BeachColors.textSecondary),
-                    ),
-                  ],
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 20, color: BeachColors.textSecondary),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
-          ),
 
-          // ── Messages ─────────────────────────────────────────────────
-          Expanded(
+            // ── Messages ─────────────────────────────────────────────────
+            Expanded(
+
             child: _messages.isEmpty
                 ? const Center(
                     child: Column(
@@ -365,8 +408,10 @@ class _LiveChatSheetState extends State<LiveChatSheet> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
+
 
   Widget _buildBubble(_ChatMsg msg, bool isMe) {
     return Padding(
