@@ -133,6 +133,7 @@ class TripHistoryService extends ChangeNotifier {
     required String driverId,
     required double rating,
   }) async {
+    // Actualizar en memoria local (cuando lo llama el mismo chofer)
     if (_trips.isNotEmpty) {
       final latest = _trips.first;
       final updated = CompletedTrip(
@@ -149,16 +150,25 @@ class TripHistoryService extends ChangeNotifier {
       _trips[0] = updated;
       notifyListeners();
       await _persist(driverId);
-      try {
-        await FirebaseFirestore.instance
+    }
+
+    // SIEMPRE escribir en Firestore directamente (funciona incluso cuando el
+    // pasajero llama este método y _trips está vacío en su instancia del singleton)
+    try {
+      final snap = await FirebaseFirestore.instance
           .collection('drivers')
           .doc(driverId)
           .collection('trips')
-          .doc(updated.id)
-          .set(updated.toMap(), SetOptions(merge: true));
-      } catch (e) {
-        debugPrint('TripHistoryService Firestore rating error: $e');
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        await snap.docs.first.reference
+            .update({'passengerRating': rating});
+        debugPrint('TripHistoryService: calificación $rating guardada en Firestore para driver $driverId');
       }
+    } catch (e) {
+      debugPrint('TripHistoryService Firestore rating error: $e');
     }
   }
 

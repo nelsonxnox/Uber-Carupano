@@ -1218,6 +1218,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Widget _buildDriverDrawer() {
+    // Recargar desde Firestore cada vez que se abre el drawer para ver ratings actualizados
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final profId = _profile?.id;
+      if (profId != null && profId.isNotEmpty) {
+        _tripHistory.load(profId);
+      }
+    });
+
     final trips = _tripHistory.trips;
     final totalEarnings = _tripHistory.totalEarnings;
     final avgRating = _tripHistory.averageRating;
