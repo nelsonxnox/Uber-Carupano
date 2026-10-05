@@ -13,6 +13,7 @@ class CompletedTrip {
   final DateTime timestamp;
   final double passengerRating;
   final String paymentMethod;
+  final double commissionAmount; // 5% de la plataforma
 
   const CompletedTrip({
     required this.id,
@@ -24,7 +25,8 @@ class CompletedTrip {
     required this.timestamp,
     this.passengerRating = 0,
     this.paymentMethod = 'efectivo',
-  });
+    double? commissionAmount,
+  }) : commissionAmount = commissionAmount ?? (price * 0.05);
 
   Map<String, dynamic> toMap() => {
         'id': id,
@@ -36,21 +38,27 @@ class CompletedTrip {
         'timestamp': timestamp.toIso8601String(),
         'passengerRating': passengerRating,
         'paymentMethod': paymentMethod,
+        'commissionAmount': commissionAmount,
       };
 
-  factory CompletedTrip.fromMap(Map<String, dynamic> m) => CompletedTrip(
-        id: m['id']?.toString() ?? '',
-        passengerName: m['passengerName']?.toString() ?? 'Pasajero',
-        pickupAddress: m['pickupAddress']?.toString() ?? '',
-        dropoffAddress: m['dropoffAddress']?.toString() ?? '',
-        price: (m['price'] as num?)?.toDouble() ?? 0,
-        distanceKm: (m['distanceKm'] as num?)?.toDouble() ?? 0,
-        timestamp: m['timestamp'] != null
-            ? DateTime.tryParse(m['timestamp'].toString()) ?? DateTime.now()
-            : DateTime.now(),
-        passengerRating: (m['passengerRating'] as num?)?.toDouble() ?? 0,
-        paymentMethod: m['paymentMethod']?.toString() ?? 'efectivo',
-      );
+  factory CompletedTrip.fromMap(Map<String, dynamic> m) {
+    final tripPrice = (m['price'] as num?)?.toDouble() ?? 0.0;
+    final comm = (m['commissionAmount'] as num?)?.toDouble() ?? (tripPrice * 0.05);
+    return CompletedTrip(
+      id: m['id']?.toString() ?? '',
+      passengerName: m['passengerName']?.toString() ?? 'Pasajero',
+      pickupAddress: m['pickupAddress']?.toString() ?? '',
+      dropoffAddress: m['dropoffAddress']?.toString() ?? '',
+      price: tripPrice,
+      distanceKm: (m['distanceKm'] as num?)?.toDouble() ?? 0,
+      timestamp: m['timestamp'] != null
+          ? DateTime.tryParse(m['timestamp'].toString()) ?? DateTime.now()
+          : DateTime.now(),
+      passengerRating: (m['passengerRating'] as num?)?.toDouble() ?? 0,
+      paymentMethod: m['paymentMethod']?.toString() ?? 'efectivo',
+      commissionAmount: comm,
+    );
+  }
 }
 
 class TripHistoryService extends ChangeNotifier {
@@ -64,6 +72,19 @@ class TripHistoryService extends ChangeNotifier {
 
   double get totalEarnings =>
       _trips.fold(0.0, (acc, t) => acc + t.price);
+
+  /// Total bruto cobrado por el chofer
+  double get totalGrossEarnings => totalEarnings;
+
+  /// Total de comisión acumulada (5%) para la aplicación
+  double get totalCommission =>
+      _trips.fold(0.0, (acc, t) => acc + t.commissionAmount);
+
+  /// Ganancia neta real para el chofer (95%)
+  double get totalNetEarnings => totalGrossEarnings - totalCommission;
+
+  /// Límite máximo de crédito/deuda antes de pausar ($10.00 USD)
+  static const double maxDebtLimit = 10.0;
 
   double get averageRating {
     final rated = _trips.where((t) => t.passengerRating > 0).toList();
@@ -118,14 +139,66 @@ class TripHistoryService extends ChangeNotifier {
     notifyListeners();
     await _persist(driverId);
     try {
-      await FirebaseFirestore.instance
+      final db = FirebaseFirestore.instance;
+
+      // 1. Guardar viaje en subcolección de viajes del chofer
+      await db
           .collection('drivers')
           .doc(driverId)
           .collection('trips')
           .doc(trip.id)
           .set(trip.toMap());
+
+      // 2. Incrementar saldo acumulado de comisión y ganancias en el perfil del chofer
+      await db.collection('drivers').doc(driverId).set({
+        'pendingCommission': FieldValue.increment(trip.commissionAmount),
+        'totalGrossEarnings': FieldValue.increment(trip.price),
+        'totalRides': FieldValue.increment(1),
+      }, SetOptions(merge: true));
+
+      debugPrint('TripHistoryService: viaje ${trip.id} y comisión \$${trip.commissionAmount.toStringAsFixed(2)} registrados.');
     } catch (e) {
       debugPrint('TripHistoryService Firestore error: $e');
+    }
+  }
+
+  /// Reporta un abono o pago de comisión del chofer hacia la aplicación
+  Future<bool> reportCommissionPayment({
+    required String driverId,
+    required double amountUsd,
+    required String reference,
+    required String bank,
+  }) async {
+    try {
+      final db = FirebaseFirestore.instance;
+      final paymentId = 'pay_${DateTime.now().millisecondsSinceEpoch}';
+
+      await db
+          .collection('drivers')
+          .doc(driverId)
+          .collection('payments')
+          .doc(paymentId)
+          .set({
+        'id': paymentId,
+        'driverId': driverId,
+        'amountUsd': amountUsd,
+        'reference': reference.trim(),
+        'bank': bank,
+        'status': 'reported',
+        'createdAt': DateTime.now().toIso8601String(),
+      });
+
+      // Deducir del saldo pendiente en Firestore
+      await db.collection('drivers').doc(driverId).set({
+        'pendingCommission': FieldValue.increment(-amountUsd),
+        'lastPaymentDate': DateTime.now().toIso8601String(),
+      }, SetOptions(merge: true));
+
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('Error reportando pago de comisión: $e');
+      return false;
     }
   }
 

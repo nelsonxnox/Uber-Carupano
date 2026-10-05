@@ -14,6 +14,7 @@ import '../../services/trip_history_service.dart';
 import '../../services/notification_sound_service.dart';
 import '../../services/auth_service.dart';
 import 'driver_register_screen.dart';
+import 'driver_finances_sheet.dart';
 import '../shared/live_chat_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
@@ -515,12 +516,40 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             children: [
               Text(
                 'Cobraste \$${earned.toStringAsFixed(2)} USD de ${ride.passengerName}.',
-                style: const TextStyle(fontSize: 13),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 4),
-              Text(
-                'Se acreditó a tu billetera. Balance total: \$${driverWallet.toStringAsFixed(2)}',
-                style: const TextStyle(fontSize: 11.5, color: BeachColors.textSecondary),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: BeachColors.backgroundSand,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: BeachColors.lagoonBorder),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Comisión App (5%):', style: TextStyle(fontSize: 11, color: Color(0xFFDC2626))),
+                        Text('-\$${(earned * 0.05).toStringAsFixed(2)}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFFDC2626))),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Tu ganancia neta:', style: TextStyle(fontSize: 11, color: BeachColors.emeraldSuccess)),
+                        Text('+\$${(earned * 0.95).toStringAsFixed(2)}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: BeachColors.emeraldSuccess)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Acumulado en tu Billetera. El corte de comisiones es este viernes.',
+                style: TextStyle(fontSize: 10.5, color: BeachColors.textSecondary),
               ),
             ],
           ),
@@ -532,8 +561,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   _activeAcceptedRide = null;
                 });
                 _stopGpsStream();
+                DriverFinancesSheet.show(
+                  context,
+                  driverId: _profile?.id ?? 'driver_me',
+                  driverName: _profile?.fullName ?? 'Conductor',
+                );
               },
-              child: const Text('Aceptar', style: TextStyle(fontWeight: FontWeight.bold, color: BeachColors.oceanPrimary)),
+              child: const Text('Ver Finanzas', style: TextStyle(color: BeachColors.oceanPrimary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: BeachColors.emeraldSuccess,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () {
+                Navigator.pop(ctx);
+                setState(() {
+                  _activeAcceptedRide = null;
+                });
+                _stopGpsStream();
+              },
+              child: const Text('Listo', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
             ),
           ],
         ),
@@ -670,34 +718,53 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: BeachColors.oceanLight,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Icon(Icons.account_balance_wallet_outlined,
-                                color: BeachColors.oceanPrimary, size: 16),
-                          ),
-                          const SizedBox(width: 8),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                      InkWell(
+                        onTap: () {
+                          DriverFinancesSheet.show(
+                            context,
+                            driverId: _profile?.id ?? 'driver_me',
+                            driverName: _profile?.fullName ?? 'Conductor',
+                          );
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                          child: Row(
                             children: [
-                              const Text('Billetera',
-                                  style: TextStyle(color: BeachColors.textMuted, fontSize: 9.5)),
-                              Text(
-                                '\$${driverWallet.toStringAsFixed(2)} USD',
-                                style: const TextStyle(
-                                  color: BeachColors.textMain,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 13,
+                              Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: BeachColors.oceanLight,
+                                  borderRadius: BorderRadius.circular(8),
                                 ),
+                                child: const Icon(Icons.account_balance_wallet_outlined,
+                                    color: BeachColors.oceanPrimary, size: 16),
+                              ),
+                              const SizedBox(width: 8),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Row(
+                                    children: [
+                                      Text('Billetera',
+                                          style: TextStyle(color: BeachColors.textMuted, fontSize: 9.5)),
+                                      SizedBox(width: 4),
+                                      Icon(Icons.arrow_forward_ios, size: 8, color: BeachColors.textMuted),
+                                    ],
+                                  ),
+                                  Text(
+                                    '\$${driverWallet.toStringAsFixed(2)} USD',
+                                    style: const TextStyle(
+                                      color: BeachColors.textMain,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
-                        ],
+                        ),
                       ),
                       Row(
                         children: [
@@ -1542,11 +1609,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: _drawerActionCard(
-                          icon: Icons.account_balance_wallet,
-                          label: 'Billetera',
-                          value: '\$${driverWallet.toStringAsFixed(2)}',
-                          color: BeachColors.emeraldSuccess,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.pop(context); // Cerrar drawer
+                            DriverFinancesSheet.show(
+                              context,
+                              driverId: _profile?.id ?? 'driver_me',
+                              driverName: _profile?.fullName ?? 'Conductor',
+                            );
+                          },
+                          borderRadius: BorderRadius.circular(10),
+                          child: _drawerActionCard(
+                            icon: Icons.account_balance_wallet,
+                            label: 'Billetera',
+                            value: '\$${driverWallet.toStringAsFixed(2)}',
+                            color: BeachColors.emeraldSuccess,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
