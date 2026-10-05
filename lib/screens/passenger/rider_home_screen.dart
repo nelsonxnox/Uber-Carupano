@@ -741,7 +741,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   void _adjustFare(double delta) {
     double current = double.tryParse(_fareController.text) ?? 2.50;
     double updated = current + delta;
-    if (updated < 1.0) updated = 1.0;
+    if (updated < 0.50) updated = 0.50;
     setState(() {
       _fareController.text = updated.toStringAsFixed(2);
     });
@@ -772,10 +772,10 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     }
 
     final double fare = double.tryParse(_fareController.text) ?? 0;
-    if (fare < 1.0) {
+    if (fare < 0.50) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('⚠️ La tarifa mínima es \$1.00 USD'),
+          content: Text('⚠️ La tarifa mínima permitida es \$0.50 USD'),
           backgroundColor: Color(0xFFEF4444),
           duration: Duration(seconds: 2),
         ),
@@ -1001,6 +1001,99 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       acceptedDriver = null;
       driverOffers.clear();
     });
+  }
+
+  void _showPassengerCancelDialog() {
+    final cur = _rideService.currentPassengerRide;
+    final rideId = cur?.id;
+    if (rideId == null) {
+      _resetRide();
+      return;
+    }
+
+    final reasons = [
+      'El conductor me pidió cancelar',
+      'El conductor tarda demasiado en llegar',
+      'Cambié de planes / ya no necesito el viaje',
+      'El vehículo o placa no coincide',
+      'Otro motivo',
+    ];
+    String selectedReason = reasons.first;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.cancel_outlined, color: Color(0xFFDC2626)),
+              SizedBox(width: 8),
+              Text('Cancelar Viaje', style: TextStyle(fontSize: 16)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Por favor selecciona el motivo de la cancelación:',
+                style: TextStyle(fontSize: 12, color: BeachColors.textSecondary),
+              ),
+              const SizedBox(height: 10),
+              ...reasons.map((r) => RadioListTile<String>(
+                value: r,
+                groupValue: selectedReason,
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                activeColor: const Color(0xFFDC2626),
+                title: Text(r, style: const TextStyle(fontSize: 12.5)),
+                onChanged: (val) {
+                  if (val != null) setDialogState(() => selectedReason = val);
+                },
+              )),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Volver al Viaje', style: TextStyle(color: BeachColors.textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () async {
+                Navigator.pop(ctx);
+                _searchTimeoutTimer?.cancel();
+                await _rideService.cancelRideWithReason(
+                  rideId: rideId,
+                  reason: selectedReason,
+                  cancelledBy: 'passenger',
+                );
+                setState(() {
+                  rideState = 'idle';
+                  acceptedDriver = null;
+                  driverOffers.clear();
+                  _driverToPickupRoutePoints.clear();
+                  _driverCurrentPoint = null;
+                });
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Viaje cancelado con éxito.'),
+                      backgroundColor: BeachColors.textSecondary,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Confirmar Cancelación', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   String get _buttonVehicleLabel {
@@ -1831,6 +1924,31 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                 },
               ),
             ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () {
+                _searchTimeoutTimer?.cancel();
+                _resetRide();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Búsqueda de viaje cancelada.'),
+                    backgroundColor: BeachColors.textSecondary,
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.cancel_outlined, size: 16, color: Color(0xFFDC2626)),
+              label: const Text('Cancelar Búsqueda',
+                  style: TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.w700, fontSize: 12)),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Color(0xFFFCA5A5)),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -2245,10 +2363,16 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               ),
 
               const SizedBox(width: 8),
-              IconButton(
-                onPressed: _resetRide,
-                tooltip: 'Cancelar',
-                icon: const Icon(Icons.close, color: Color(0xFFEF4444), size: 20),
+              OutlinedButton.icon(
+                onPressed: _showPassengerCancelDialog,
+                icon: const Icon(Icons.cancel_outlined, size: 15, color: Color(0xFFDC2626)),
+                label: const Text('Cancelar', style: TextStyle(fontSize: 11.5, color: Color(0xFFDC2626))),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFDC2626),
+                  side: const BorderSide(color: Color(0xFFFCA5A5)),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
               ),
             ],
           ),

@@ -589,6 +589,93 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
   }
 
+  void _showDriverCancelDialog() {
+    final ride = _activeAcceptedRide;
+    if (ride == null) return;
+
+    final reasons = [
+      'El pasajero no se presentó / no salió',
+      'Falla mecánica o percance con el vehículo',
+      'Punto de recogida inaccesible o bloqueado',
+      'Pasajero solicitó cancelar por chat',
+      'Otro motivo',
+    ];
+    String selectedReason = reasons.first;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.cancel_outlined, color: Color(0xFFDC2626)),
+              SizedBox(width: 8),
+              Text('Cancelar Carrera', style: TextStyle(fontSize: 16)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Indica el motivo por el cual no puedes completar la carrera:',
+                style: TextStyle(fontSize: 12, color: BeachColors.textSecondary),
+              ),
+              const SizedBox(height: 10),
+              ...reasons.map((r) => RadioListTile<String>(
+                value: r,
+                groupValue: selectedReason,
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                activeColor: const Color(0xFFDC2626),
+                title: Text(r, style: const TextStyle(fontSize: 12.5)),
+                onChanged: (val) {
+                  if (val != null) setDialogState(() => selectedReason = val);
+                },
+              )),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Volver al Viaje', style: TextStyle(color: BeachColors.textSecondary)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await _rideService.cancelRideWithReason(
+                  rideId: ride.id,
+                  reason: selectedReason,
+                  cancelledBy: 'driver',
+                );
+                setState(() {
+                  _activeAcceptedRide = null;
+                  _activeRoutePoints = [];
+                  _activeRideStep = 'heading_to_pickup';
+                });
+                _stopGpsStream();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Carrera cancelada. Has vuelto al radar.'),
+                      backgroundColor: BeachColors.textSecondary,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Confirmar Cancelación', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoadingProfile) {
@@ -1256,18 +1343,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      _activeAcceptedRide = null;
-                      _activeRoutePoints = [];
-                    });
-                    _stopGpsStream();
-                  },
-                  icon: const Icon(Icons.radar, size: 15),
-                  label: const Text('Radar', style: TextStyle(fontSize: 11.5)),
+                  onPressed: _showDriverCancelDialog,
+                  icon: const Icon(Icons.cancel_outlined, size: 15, color: Color(0xFFDC2626)),
+                  label: const Text('Cancelar', style: TextStyle(fontSize: 11.5, color: Color(0xFFDC2626))),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: BeachColors.textSecondary,
-                    side: const BorderSide(color: BeachColors.lagoonBorder),
+                    foregroundColor: const Color(0xFFDC2626),
+                    side: const BorderSide(color: Color(0xFFFCA5A5)),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     padding: const EdgeInsets.symmetric(vertical: 9),
                   ),

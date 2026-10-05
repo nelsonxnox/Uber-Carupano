@@ -81,6 +81,8 @@ class RideRequest {
   DriverOffer? acceptedOffer;
   LatLng? currentDriverLocation;
   final DateTime createdAt;
+  String? cancelReason;
+  String? cancelledBy;
 
   RideRequest({
     required this.id,
@@ -100,6 +102,8 @@ class RideRequest {
     this.acceptedOffer,
     this.currentDriverLocation,
     DateTime? createdAt,
+    this.cancelReason,
+    this.cancelledBy,
   })  : offers = offers ?? [],
         createdAt = createdAt ?? DateTime.now();
 
@@ -125,6 +129,8 @@ class RideRequest {
       'driverLat': currentDriverLocation?.latitude,
       'driverLon': currentDriverLocation?.longitude,
       'createdAt': createdAt.toIso8601String(),
+      'cancelReason': cancelReason,
+      'cancelledBy': cancelledBy,
     };
   }
 
@@ -170,6 +176,8 @@ class RideRequest {
       createdAt: map['createdAt'] != null
           ? DateTime.tryParse(map['createdAt'].toString()) ?? DateTime.now()
           : DateTime.now(),
+      cancelReason: map['cancelReason']?.toString(),
+      cancelledBy: map['cancelledBy']?.toString(),
     );
   }
 }
@@ -182,8 +190,22 @@ class RideService extends ChangeNotifier {
   }
 
   final List<RideRequest> _rides = [];
-  List<RideRequest> get activeRides =>
-      _rides.where((r) => r.status != 'cancelled' && r.status != 'completed').toList();
+
+  /// Retorna las carreras activas para el chofer.
+  /// Auto-expira automáticamente solicitudes en búsqueda con más de 5 minutos.
+  List<RideRequest> get activeRides {
+    final now = DateTime.now();
+    return _rides.where((r) {
+      if (r.status == 'cancelled' || r.status == 'completed') return false;
+      // Auto-expiración de carreras en búsqueda/negociación con más de 5 minutos
+      if (r.status == 'searching' || r.status == 'negotiating') {
+        if (now.difference(r.createdAt).inMinutes >= 5) {
+          return false;
+        }
+      }
+      return true;
+    }).toList();
+  }
 
   RideRequest? _currentPassengerRide;
   RideRequest? get currentPassengerRide => _currentPassengerRide;
@@ -398,6 +420,37 @@ class RideService extends ChangeNotifier {
       rideId: rideId,
       newStatus: 'cancelled',
     );
+  }
+
+  /// Cancela la carrera guardando el motivo y quién la canceló ('passenger' o 'driver')
+  Future<void> cancelRideWithReason({
+    required String rideId,
+    required String reason,
+    required String cancelledBy,
+  }) async {
+    final index = _rides.indexWhere((r) => r.id == rideId);
+    if (index != -1) {
+      _rides[index].status = 'cancelled';
+      _rides[index].cancelReason = reason;
+      _rides[index].cancelledBy = cancelledBy;
+      if (_currentPassengerRide?.id == rideId) {
+        _currentPassengerRide = _rides[index];
+      }
+      notifyListeners();
+
+      try {
+        await FirebaseFirestore.instance.collection('rides').doc(rideId).update({
+          'status': 'cancelled',
+          'cancelReason': reason,
+          'cancelledBy': cancelledBy,
+          'cancelledAt': DateTime.now().toIso8601String(),
+        });
+        _cleanRideChatMessages(rideId);
+        debugPrint('🚫 Viaje $rideId cancelado por $cancelledBy. Motivo: $reason');
+      } catch (e) {
+        debugPrint('Firestore cancel with reason error: $e');
+      }
+    }
   }
 
   void cancelCurrentPassengerRide() {
