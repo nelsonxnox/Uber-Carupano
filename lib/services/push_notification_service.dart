@@ -1,88 +1,83 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-/// Servicio para registrar y sincronizar los Device Tokens (FCM)
-/// de pasajeros y conductores en Firestore.
-/// Permite enviar notificaciones push directas cuando el teléfono está bloqueado o en reposo.
 class PushNotificationService {
-  static final PushNotificationService _instance = PushNotificationService._();
+  static final PushNotificationService _instance =
+      PushNotificationService._internal();
   factory PushNotificationService() => _instance;
-  PushNotificationService._();
+  PushNotificationService._internal();
 
-  static const String _tokenPrefKey = 'cached_device_fcm_token';
+  String? _cachedToken;
 
-  String? _currentToken;
-  String? get currentToken => _currentToken;
-
-  /// Inicializa el servicio y recupera o genera un token de dispositivo
+  /// Inicializa FCM y solicita permiso en iOS/web.
+  /// En web no hay tokens para push background, así que simplemente retorna.
   Future<void> init() async {
+    if (kIsWeb) return; // Web no soporta push background
     try {
-      final prefs = await SharedPreferences.getInstance();
-      _currentToken = prefs.getString(_tokenPrefKey);
+      final messaging = FirebaseMessaging.instance;
 
-      // Si no existe un token previo, generamos uno representativo de este dispositivo
-      if (_currentToken == null) {
-        _currentToken = 'tok_${DateTime.now().millisecondsSinceEpoch}_${(1000 + (DateTime.now().microsecond % 9000))}';
-        await prefs.setString(_tokenPrefKey, _currentToken!);
-      }
-      debugPrint('📲 FCM Device Token inicializado: $_currentToken');
+      // Solicita permiso (obligatorio en iOS, sin efecto en Android)
+      await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+
+      // Obtiene el token real del dispositivo
+      _cachedToken = await messaging.getToken();
+      debugPrint('[FCM] Token obtenido: $_cachedToken');
+
+      // Escucha refrescos de token (el SO puede rotar el token)
+      messaging.onTokenRefresh.listen((newToken) {
+        _cachedToken = newToken;
+        debugPrint('[FCM] Token refrescado: $newToken');
+      });
     } catch (e) {
-      debugPrint('Error inicializando PushNotificationService: $e');
+      debugPrint('[FCM] Error en init: $e');
     }
   }
 
-  /// Vincula el token del teléfono al usuario o chofer en Firestore
+  /// Guarda el token en Firestore bajo el perfil del usuario/chofer.
   Future<void> syncUserToken({
     required String userId,
     required bool isDriver,
-    String? phone,
+    String phone = '',
   }) async {
-    if (_currentToken == null) await init();
-    if (_currentToken == null) return;
-
+    if (kIsWeb) return;
+    final token = _cachedToken ?? await FirebaseMessaging.instance.getToken();
+    if (token == null) return;
     try {
-      final data = {
-        'fcmToken': _currentToken,
-        'fcmUpdatedAt': FieldValue.serverTimestamp(),
-        'platform': kIsWeb ? 'web' : 'android',
-      };
-
       if (isDriver) {
-        // Guardar en la colección de choferes
-        await FirebaseFirestore.instance.collection('drivers').doc(userId).set(
-          data,
-          SetOptions(merge: true),
-        );
-        debugPrint('✅ FCM Token sincronizado para conductor: $userId');
+        await FirebaseFirestore.instance
+            .collection('drivers')
+            .doc(userId)
+            .set({'fcmToken': token}, SetOptions(merge: true));
       } else {
-        // Guardar en la colección de usuarios/pasajeros
-        final docRef = (phone != null && phone.isNotEmpty)
-            ? FirebaseFirestore.instance.collection('users').doc(phone)
-            : FirebaseFirestore.instance.collection('users').doc(userId);
-
-        await docRef.set(data, SetOptions(merge: true));
-        debugPrint('✅ FCM Token sincronizado para pasajero: $userId');
+        final targetDoc = phone.isNotEmpty ? phone : userId;
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(targetDoc)
+            .set({'fcmToken': token}, SetOptions(merge: true));
       }
+      debugPrint('[FCM] Token sincronizado para ${isDriver ? "driver" : "user"} $userId');
     } catch (e) {
-      debugPrint('Error sincronizando FCM Token en Firestore: $e');
+      debugPrint('[FCM] Error sincronizando token: $e');
     }
   }
 
-  /// Obtiene el token FCM registrado del destinatario (para enviar push)
-  Future<String?> getRecipientToken({
-    required String recipientId,
-    required bool isDriver,
-  }) async {
+  /// Obtiene el token FCM del destinatario desde Firestore.
+  Future<String?> getRecipientToken(String recipientId, bool isDriver) async {
     try {
       final col = isDriver ? 'drivers' : 'users';
-      final doc = await FirebaseFirestore.instance.collection(col).doc(recipientId).get();
-      if (doc.exists && doc.data() != null) {
-        return doc.data()!['fcmToken']?.toString();
-      }
+      final doc = await FirebaseFirestore.instance
+          .collection(col)
+          .doc(recipientId)
+          .get();
+      return doc.data()?['fcmToken'] as String?;
     } catch (e) {
-      debugPrint('Error obteniendo token FCM de destinatario: $e');
+      debugPrint('[FCM] Error obteniendo token del destinatario: $e');
+      return null;
     }
-    return null;
   }
 }

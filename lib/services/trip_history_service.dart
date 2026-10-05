@@ -152,10 +152,11 @@ class TripHistoryService extends ChangeNotifier {
       await _persist(driverId);
     }
 
-    // SIEMPRE escribir en Firestore directamente (funciona incluso cuando el
-    // pasajero llama este método y _trips está vacío en su instancia del singleton)
+    final db = FirebaseFirestore.instance;
+
+    // 1. Actualizar el passengerRating en el viaje específico
     try {
-      final snap = await FirebaseFirestore.instance
+      final snap = await db
           .collection('drivers')
           .doc(driverId)
           .collection('trips')
@@ -163,12 +164,39 @@ class TripHistoryService extends ChangeNotifier {
           .limit(1)
           .get();
       if (snap.docs.isNotEmpty) {
-        await snap.docs.first.reference
-            .update({'passengerRating': rating});
-        debugPrint('TripHistoryService: calificación $rating guardada en Firestore para driver $driverId');
+        await snap.docs.first.reference.update({'passengerRating': rating});
+        debugPrint('TripHistoryService: rating $rating guardado en viaje.');
       }
     } catch (e) {
-      debugPrint('TripHistoryService Firestore rating error: $e');
+      debugPrint('TripHistoryService Firestore trip rating error: $e');
+    }
+
+    // 2. Recalcular y actualizar el rating global del chofer en su perfil
+    // usando una transacción atómica para evitar race conditions
+    try {
+      final driverRef = db.collection('drivers').doc(driverId);
+      await db.runTransaction((tx) async {
+        final driverSnap = await tx.get(driverRef);
+        if (!driverSnap.exists) return;
+        final data = driverSnap.data()!;
+        final currentRating = (data['rating'] as num?)?.toDouble() ?? 0.0;
+        final totalRatings = (data['totalRatings'] as num?)?.toInt() ?? 0;
+
+        // Promedio acumulado: ((rating_actual * total) + nuevo) / (total + 1)
+        final newTotal = totalRatings + 1;
+        final newRating = totalRatings == 0
+            ? rating
+            : ((currentRating * totalRatings) + rating) / newTotal;
+
+        tx.update(driverRef, {
+          'rating': double.parse(newRating.toStringAsFixed(2)),
+          'totalRatings': newTotal,
+        });
+        debugPrint(
+            'Rating chofer actualizado: $currentRating → ${newRating.toStringAsFixed(2)} ($newTotal calificaciones)');
+      });
+    } catch (e) {
+      debugPrint('TripHistoryService Firestore driver rating update error: $e');
     }
   }
 

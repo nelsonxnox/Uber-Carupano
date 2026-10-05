@@ -45,5 +45,10 @@ app.*.map.json
 /android/app/release
 /releases/
 
+# Node / Functions related
+node_modules/
+functions/node_modules/
+package-lock.json
+
 # Widget Preview related
 .widget_preview/

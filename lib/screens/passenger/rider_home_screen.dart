@@ -166,6 +166,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
   // Búsqueda de direcciones con Nominatim (OpenStreetMap)
   Timer? _searchDebounce;
+  Timer? _searchTimeoutTimer; // Timeout de 5 min si no hay choferes
 
   @override
   void initState() {
@@ -205,6 +206,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   void dispose() {
     _rideService.removeListener(_onPassengerRideServiceChanged);
     _searchDebounce?.cancel();
+    _searchTimeoutTimer?.cancel();
     _originController.dispose();
     _destController.dispose();
     _noteController.dispose();
@@ -904,10 +906,12 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     });
 
     final passenger = AuthService().currentUser?.fullName ?? 'Pasajero Carúpano';
+    final passengerPhone = AuthService().currentUser?.phone ?? '';
 
     try {
       await _rideService.requestRide(
         passengerName: passenger,
+        passengerPhone: passengerPhone,
         pickupAddress: _originController.text,
         pickupPoint: _originPoint,
         dropoffAddress: _destController.text,
@@ -937,6 +941,32 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
     if (mounted) {
       setState(() => _isSendingRide = false);
+
+      // ─── Timeout de búsqueda: 5 minutos sin respuesta ───
+      _searchTimeoutTimer?.cancel();
+      _searchTimeoutTimer = Timer(const Duration(minutes: 5), () {
+        if (!mounted) return;
+        // Solo cancela si todavía está en búsqueda/negociación
+        if (rideState == 'negotiating') {
+          final rideId = _rideService.currentPassengerRide?.id;
+          if (rideId != null) {
+            _rideService.cancelRide(rideId);
+          }
+          setState(() {
+            rideState = 'idle';
+            _isSendingRide = false;
+            driverOffers = [];
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  '⏱️ No hubo choferes disponibles. Intenta de nuevo en unos minutos.'),
+              backgroundColor: Color(0xFFEF4444),
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+      });
     }
   }
 
@@ -955,6 +985,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       );
       _rideService.acceptOffer(rideId: cur.id, offer: offer);
     }
+
+    _searchTimeoutTimer?.cancel(); // Ya hay chofer, cancelar timeout
 
     setState(() {
       acceptedDriver = driver;
@@ -1950,7 +1982,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     Color statusFg = BeachColors.oceanPrimary;
 
     if (status == 'arrived') {
-      statusTitle = '¡El conductor ha llegado al punto de recogida!';
+      statusTitle = '¡El conductor llegó! Verifica la placa al abordar.';
       statusIcon = Icons.location_on;
       statusBg = const Color(0xFFD1FAE5);
       statusFg = BeachColors.emeraldSuccess;
@@ -2062,53 +2094,88 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           Row(
             children: [
               CircleAvatar(
-                radius: 22,
+                radius: 20,
                 backgroundColor: BeachColors.oceanLight,
                 child: const Icon(Icons.person,
-                    color: BeachColors.oceanPrimary, size: 24),
+                    color: BeachColors.oceanPrimary, size: 22),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      acceptedDriver!['name'],
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: BeachColors.textMain,
-                      ),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            acceptedDriver!['name']?.toString() ?? 'Conductor',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: BeachColors.textMain,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (acceptedDriver!['rating'] != null) ...[
+                          const SizedBox(width: 6),
+                          const Icon(Icons.star_rounded,
+                              size: 13, color: Color(0xFFF59E0B)),
+                          Text(
+                            ' ${acceptedDriver!['rating']}',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: BeachColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
+                    const SizedBox(height: 2),
                     Text(
-                      acceptedDriver!['vehicle'],
+                      acceptedDriver!['vehicle']?.toString() ?? 'Vehículo',
                       style: const TextStyle(
-                          fontSize: 11, color: BeachColors.textSecondary),
+                        fontSize: 11,
+                        color: BeachColors.textSecondary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
               ),
+              // Placa vehicular sencilla y sobria
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: BeachColors.backgroundSand,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: BeachColors.lagoonBorder),
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: const Color(0xFFCBD5E1), width: 1.2),
                 ),
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text('PLACA',
-                        style: TextStyle(
-                            fontSize: 8,
-                            fontWeight: FontWeight.w600,
-                            color: BeachColors.textSecondary)),
+                    const Text(
+                      'PLACA',
+                      style: TextStyle(
+                        fontSize: 7.5,
+                        letterSpacing: 1.0,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF64748B),
+                      ),
+                    ),
                     Text(
-                      acceptedDriver!['plate'],
+                      (acceptedDriver!['plate']?.toString().trim().isNotEmpty ?? false)
+                          ? acceptedDriver!['plate'].toString().trim().toUpperCase()
+                          : 'S/P',
                       style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w800,
-                          color: BeachColors.textMain),
+                        fontSize: 12.5,
+                        letterSpacing: 1.1,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF0F172A),
+                      ),
                     ),
                   ],
                 ),

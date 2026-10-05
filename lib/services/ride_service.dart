@@ -66,6 +66,7 @@ class DriverOffer {
 class RideRequest {
   final String id;
   final String passengerName;
+  final String passengerPhone; // Needed for FCM chat notifications to passenger
   final String pickupAddress;
   final LatLng pickupPoint;
   final String dropoffAddress;
@@ -84,6 +85,7 @@ class RideRequest {
   RideRequest({
     required this.id,
     required this.passengerName,
+    this.passengerPhone = '',
     required this.pickupAddress,
     required this.pickupPoint,
     required this.dropoffAddress,
@@ -105,6 +107,7 @@ class RideRequest {
     return {
       'id': id,
       'passengerName': passengerName,
+      'passengerPhone': passengerPhone,
       'pickupAddress': pickupAddress,
       'pickupLat': pickupPoint.latitude,
       'pickupLon': pickupPoint.longitude,
@@ -144,6 +147,7 @@ class RideRequest {
     return RideRequest(
       id: docId,
       passengerName: map['passengerName']?.toString() ?? 'Pasajero',
+      passengerPhone: map['passengerPhone']?.toString() ?? '',
       pickupAddress: map['pickupAddress']?.toString() ?? 'Carúpano',
       pickupPoint: LatLng(
         (map['pickupLat'] as num?)?.toDouble() ?? 10.6678,
@@ -222,6 +226,7 @@ class RideService extends ChangeNotifier {
 
   Future<RideRequest> requestRide({
     required String passengerName,
+    String passengerPhone = '',
     required String pickupAddress,
     required LatLng pickupPoint,
     required String dropoffAddress,
@@ -237,6 +242,7 @@ class RideService extends ChangeNotifier {
     final newRide = RideRequest(
       id: id,
       passengerName: passengerName,
+      passengerPhone: passengerPhone,
       pickupAddress: pickupAddress,
       pickupPoint: pickupPoint,
       dropoffAddress: dropoffAddress,
@@ -385,6 +391,13 @@ class RideService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Error limpiando mensajes de chat: $e');
     }
+  }
+
+  Future<void> cancelRide(String rideId) async {
+    await updateRideStatus(
+      rideId: rideId,
+      newStatus: 'cancelled',
+    );
   }
 
   void cancelCurrentPassengerRide() {
