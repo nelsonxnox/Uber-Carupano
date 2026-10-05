@@ -142,7 +142,7 @@ class _WelcomeRegisterScreenState extends State<WelcomeRegisterScreen> {
                   const SizedBox(height: 18),
 
                   const Text(
-                    'Carúpano Riders',
+                    'MoviCarúpano',
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.w800,

@@ -1,11 +1,11 @@
 {
-    "name": "carupano_riders",
-    "short_name": "carupano_riders",
+    "name": "MoviCarúpano",
+    "short_name": "MoviCarúpano",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Tu transporte rápido y seguro en Carúpano.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -37,16 +37,16 @@ void main() async {
   }
 
 
-  runApp(const CarupanoRidersApp());
+  runApp(const MoviCarupanoApp());
 }
 
-class CarupanoRidersApp extends StatelessWidget {
-  const CarupanoRidersApp({super.key});
+class MoviCarupanoApp extends StatelessWidget {
+  const MoviCarupanoApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Carúpano Riders',
+      title: 'MoviCarúpano',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         scaffoldBackgroundColor: BeachColors.backgroundSand,

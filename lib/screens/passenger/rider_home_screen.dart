@@ -1150,7 +1150,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Carúpano Riders',
+                  'MoviCarúpano',
                   style: TextStyle(
                     fontSize: 14.5,
                     fontWeight: FontWeight.w700,
@@ -2822,7 +2822,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           ListTile(
             leading: const Icon(Icons.info_outline,
                 color: BeachColors.textSecondary, size: 21),
-            title: const Text('Acerca de Carúpano Riders',
+            title: const Text('Acerca de MoviCarúpano',
                 style: TextStyle(fontSize: 13, color: BeachColors.textMain)),
             onTap: () => Navigator.pop(context),
           ),
