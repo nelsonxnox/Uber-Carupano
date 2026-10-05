@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import '../../services/trip_history_service.dart';
 import '../../theme/beach_colors.dart';
 
@@ -25,9 +24,10 @@ class DriverFinancesSheet extends StatefulWidget {
         context: context,
         builder: (_) => Dialog(
           backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480, maxHeight: 680),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+          child: SizedBox(
+            width: 480,
+            height: 660,
             child: Material(
               color: BeachColors.pureWhite,
               borderRadius: BorderRadius.circular(20),
@@ -48,9 +48,17 @@ class DriverFinancesSheet extends StatefulWidget {
       backgroundColor: Colors.transparent,
       builder: (_) => Material(
         color: Colors.transparent,
-        child: DriverFinancesSheet(
-          driverId: driverId,
-          driverName: driverName,
+        child: SizedBox(
+          height: MediaQuery.of(context).size.height * 0.85,
+          child: Material(
+            color: BeachColors.pureWhite,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+            clipBehavior: Clip.antiAlias,
+            child: DriverFinancesSheet(
+              driverId: driverId,
+              driverName: driverName,
+            ),
+          ),
         ),
       ),
     );
@@ -66,30 +74,28 @@ class _DriverFinancesSheetState extends State<DriverFinancesSheet> {
   // Tasa de cambio referencial (Bs por USD) para ayuda de cálculo
   final double _usdToBsRate = 45.0;
 
+  String _formatDate(DateTime dt) {
+    final day = dt.day.toString().padLeft(2, '0');
+    final month = dt.month.toString().padLeft(2, '0');
+    final hour = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    return '$day/$month  $hour:$min';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isDesktopWeb = MediaQuery.of(context).size.width > 500;
-    final screenH = MediaQuery.of(context).size.height;
+    return ListenableBuilder(
+      listenable: _historyService,
+      builder: (context, _) {
+        final trips = _historyService.trips;
+        final totalGross = _historyService.totalGrossEarnings;
+        final totalComm = _historyService.totalCommission;
+        final totalNet = _historyService.totalNetEarnings;
+        final isLimitExceeded = totalComm >= TripHistoryService.maxDebtLimit;
 
-    return Container(
-      height: isDesktopWeb ? 660 : (screenH * 0.85).clamp(400.0, screenH - 40),
-      decoration: BoxDecoration(
-        color: BeachColors.pureWhite,
-        borderRadius: BorderRadius.vertical(
-          top: const Radius.circular(22),
-          bottom: Radius.circular(isDesktopWeb ? 22 : 0),
-        ),
-      ),
-      child: ListenableBuilder(
-        listenable: _historyService,
-        builder: (context, _) {
-          final trips = _historyService.trips;
-          final totalGross = _historyService.totalGrossEarnings;
-          final totalComm = _historyService.totalCommission;
-          final totalNet = _historyService.totalNetEarnings;
-          final isLimitExceeded = totalComm >= TripHistoryService.maxDebtLimit;
-
-          return Column(
+        return Scaffold(
+          backgroundColor: BeachColors.pureWhite,
+          body: Column(
             children: [
               // ─── Header ───
               Container(
@@ -393,14 +399,14 @@ class _DriverFinancesSheetState extends State<DriverFinancesSheet> {
                 ),
               ),
             ],
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 
   Widget _buildTripFinanceCard(CompletedTrip trip) {
-    final dateStr = DateFormat('dd MMM   HH:mm', 'es').format(trip.timestamp);
+    final dateStr = _formatDate(trip.timestamp);
     final netEarned = trip.price - trip.commissionAmount;
 
     return Container(
